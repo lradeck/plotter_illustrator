@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.Python
+.venv/
+venv/
+.env
+
+# Written by the old color list. Cut settings live in the layer names.
+colors.json
+
+# Jobs saved while fake_plotter.py is listening.
+captures/job_*.bin
+
+# Local string dumps from installed programs.
+_strings/
+
+# One-off screenshot, not part of the tool.
+Unbenannt.png
+
+Thumbs.db
+Desktop.ini
+*.log
