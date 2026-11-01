@@ -121,7 +121,8 @@ def rgb_for(force, speed, passes, forces=None, speeds=None, pass_values=None):
 
 def build_force_card(pen_force=10, force_min=FORCE_MIN, force_max=FORCE_MAX,
                      force_step=1, speed_min=10, speed_max=50, speed_step=10,
-                     pass_min=1, pass_max=3, pass_step=1, travel=TRAVEL):
+                     pass_min=1, pass_max=3, pass_step=1, travel=TRAVEL,
+                     overcut=0):
     forces = series(force_min, force_max, force_step)
     speeds = series(speed_min, speed_max, speed_step)
     pass_values = series(pass_min, pass_max, pass_step)
@@ -133,7 +134,8 @@ def build_force_card(pen_force=10, force_min=FORCE_MIN, force_max=FORCE_MAX,
     area_gap = 8.0
     total_w = left_pad + grid_w
     total_h = len(pass_values) * block_h + max(len(pass_values) - 1, 0) * area_gap
-    margin = 12.0
+    overlap = max(float(overcut), 0.0)
+    margin = 12.0 + overlap
     page_w = max(PAGE_MM[0], total_w + 2 * margin)
     page_h = max(PAGE_MM[1], total_h + 2 * margin)
     origin_x = (page_w - total_w) / 2.0
@@ -157,9 +159,10 @@ def build_force_card(pen_force=10, force_min=FORCE_MIN, force_max=FORCE_MAX,
                 pens.append(_pen(stroke, pen_force, travel, "S" + speed_label))
             for col, force in enumerate(forces):
                 x = squares_x + col * (SQUARE_MM + GAP_MM)
-                cuts.append(_cut(
+                cuts.extend(_cut(
                     x, square_y, force, speed, passes, travel,
                     rgb_for(force, speed, passes, forces, speeds, pass_values),
+                    overlap,
                 ))
                 if row == 0:
                     force_label = str(force)
@@ -199,22 +202,42 @@ def _pen(points, force, travel, label):
     }
 
 
-def _cut(x, y, force, speed, passes, travel, rgb):
-    return {
+def _cut(x, y, force, speed, passes, travel, rgb, overcut=0):
+    common = {
         "holder": "left",
         "mode": "cut",
         "force": int(force),
         "cut_speed": int(speed),
         "travel_speed": int(travel),
-        "closed": True,
         "passes": int(passes),
         "rgb": rgb,
         "label": "F%d S%d x%d" % (force, speed, passes),
         "layer": "Left F%d S%d T%d x%d" % (int(force), int(speed), int(travel), int(passes)),
-        "points_mm": [
-            [round(x, 3), round(y, 3)],
-            [round(x + SQUARE_MM, 3), round(y, 3)],
-            [round(x + SQUARE_MM, 3), round(y + SQUARE_MM, 3)],
-            [round(x, 3), round(y + SQUARE_MM, 3)],
-        ],
     }
+    side = SQUARE_MM
+    if overcut <= 0:
+        path = dict(common)
+        path["closed"] = True
+        path["points_mm"] = [
+            [round(x, 3), round(y, 3)],
+            [round(x + side, 3), round(y, 3)],
+            [round(x + side, 3), round(y + side, 3)],
+            [round(x, 3), round(y + side, 3)],
+        ]
+        return [path]
+    # Four open lines, each running past both corners, so adjacent cuts cross
+    # and the knife stays straight instead of swinging around a corner.
+    span = overcut
+    lines = [
+        [(x - span, y), (x + side + span, y)],
+        [(x + side, y - span), (x + side, y + side + span)],
+        [(x + side + span, y + side), (x - span, y + side)],
+        [(x, y + side + span), (x, y - span)],
+    ]
+    paths = []
+    for line in lines:
+        path = dict(common)
+        path["closed"] = False
+        path["points_mm"] = [[round(px, 3), round(py, 3)] for px, py in line]
+        paths.append(path)
+    return paths

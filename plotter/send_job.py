@@ -50,6 +50,8 @@ def main(argv=None):
     parser.add_argument("--pass-max", type=int, default=3)
     parser.add_argument("--pass-step", type=int, default=1)
     parser.add_argument("--travel", type=int, default=20)
+    parser.add_argument("--overcut", type=float, default=0,
+                        help="extend each square side past the corners, in mm")
     parser.add_argument("--json-out", help="write the job json and do not connect")
     parser.add_argument("--host", default="172.31.192.1")
     parser.add_argument("--port", type=int, default=8080)
@@ -64,7 +66,7 @@ def main(argv=None):
             force_min=args.force_min, force_max=args.force_max, force_step=args.force_step,
             speed_min=args.speed_min, speed_max=args.speed_max, speed_step=args.speed_step,
             pass_min=args.pass_min, pass_max=args.pass_max, pass_step=args.pass_step,
-            travel=args.travel,
+            travel=args.travel, overcut=args.overcut,
         )
         payload = job_from_document(document)
     elif args.pattern:

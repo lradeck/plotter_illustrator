@@ -3,6 +3,8 @@
 html, body {
     margin: 0;
     height: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
     background: #2c2c2c;
     color: #f2f2f2;
     font: 12px "Segoe UI", sans-serif;
@@ -58,13 +60,22 @@ body {
 }
 
 .range {
-    display: grid;
-    grid-template-columns: 88px 28px 52px 24px 52px 52px 52px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
     gap: 4px;
-    align-items: center;
+    max-width: 100%;
 }
 
-.range span { color: #f2f2f2; }
+.range-name { color: #f2f2f2; }
+
+.line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    align-items: center;
+    max-width: 100%;
+}
 
 label { color: #c8c8c8; }
 
@@ -76,8 +87,8 @@ input, select {
     padding: 4px 6px;
 }
 
-input { width: 58px; }
-.range input { width: 100%; }
+input { width: 52px; max-width: 100%; }
+.range input { width: 52px; }
 #host { width: 128px; }
 #port { width: 58px; }
 
@@ -89,6 +100,63 @@ input { width: 58px; }
 }
 
 .check input { width: auto; }
+
+.colorhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+
+#colors {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    overflow: auto;
+    flex: 1;
+    min-height: 72px;
+    border: 1px solid #4a4a4a;
+    border-radius: 6px;
+    background: #242424;
+}
+
+#colors li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    cursor: pointer;
+}
+
+#colors li.selected { background: #3d5a80; }
+#colors li:hover { background: #3a3a3a; }
+#colors li.selected:hover { background: #3d5a80; }
+
+.chip {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    flex: 0 0 auto;
+}
+
+#apply, #reread {
+    appearance: none;
+    border: 1px solid #555;
+    background: #3a3a3a;
+    color: #f2f2f2;
+    border-radius: 4px;
+    padding: 6px 10px;
+    cursor: pointer;
+}
+
+#apply:disabled, #reread:disabled { opacity: 0.45; cursor: default; }
 
 #status {
     min-height: 32px;

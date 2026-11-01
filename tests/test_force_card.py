@@ -18,7 +18,7 @@ from force_card import (
     build_force_card,
     rgb_for,
 )
-from protocol import encode_job, parse_job
+from protocol import encode_job, parse_job, units
 
 
 class PassesTest(unittest.TestCase):
@@ -158,6 +158,50 @@ class ForceCardTest(unittest.TestCase):
         self.assertTrue(all(path["travel_speed"] == 15 for path in cuts))
         self.assertTrue(all("T15" in path["layer"] for path in cuts))
 
+    def test_overcut_crosses_four_open_lines_at_the_corners(self):
+        job = build_force_card(
+            force_min=10, force_max=10, force_step=1,
+            speed_min=20, speed_max=20, speed_step=10,
+            pass_min=2, pass_max=2, pass_step=1,
+            overcut=1.5,
+        )
+        cuts = [path for path in job["paths"] if path["mode"] == "cut"]
+        self.assertEqual(len(cuts), 4)
+        self.assertTrue(all(path["closed"] is False for path in cuts))
+        self.assertEqual(len(set(path["layer"] for path in cuts)), 1)
+        self.assertTrue(all(path["passes"] == 2 for path in cuts))
+        span = SQUARE_MM + 3.0
+        for path in cuts:
+            start, end = path["points_mm"]
+            length = abs(end[0] - start[0]) + abs(end[1] - start[1])
+            self.assertEqual(round(length, 3), span)
+        horiz = [path for path in cuts if path["points_mm"][0][1] == path["points_mm"][1][1]]
+        vert = [path for path in cuts if path["points_mm"][0][0] == path["points_mm"][1][0]]
+        left = min(vert, key=lambda path: path["points_mm"][0][0])
+        right = max(vert, key=lambda path: path["points_mm"][0][0])
+        bottom = min(horiz, key=lambda path: path["points_mm"][0][1])
+        top = max(horiz, key=lambda path: path["points_mm"][0][1])
+        corners = [
+            (left["points_mm"][0][0], bottom["points_mm"][0][1]),
+            (right["points_mm"][0][0], bottom["points_mm"][0][1]),
+            (right["points_mm"][0][0], top["points_mm"][0][1]),
+            (left["points_mm"][0][0], top["points_mm"][0][1]),
+        ]
+        for corner in corners:
+            self.assertEqual(sum(1 for path in cuts if _covers(path, corner)), 2)
+        text = encode_job(
+            cuts, job["page_mm"], accurate=True,
+            blade_offset_mm=0.35, turn_knife_mm=1, overcut_mm=0,
+        )
+        downs = [move for move in parse_job(text)["moves"] if move[0] == "D"]
+        allowed = set()
+        for path in cuts:
+            for point in path["points_mm"]:
+                allowed.add((units(point[0]), units(point[1])))
+        for move in downs:
+            self.assertIn((move[1], move[2]), allowed)
+        self.assertEqual(len(downs), 3 * 4)
+
     def test_script_is_a_plot_panel_for_the_real_plotter(self):
         path = os.path.join(os.path.dirname(__file__), "..", "Krafttest.jsx")
         with open(path, "r") as handle:
@@ -170,10 +214,23 @@ class ForceCardTest(unittest.TestCase):
         self.assertIn("parseLayerName", source)
         self.assertIn("selectedOnly", source)
         self.assertIn("--force-min", source)
+        self.assertIn("--overcut", source)
+        self.assertIn("item.filled = false", source)
+        self.assertIn("if (item.stroked) return asRgb(item.strokeColor);", source)
         self.assertIn("Nur markierte Ebenen", source)
+        self.assertIn("isComplete", source)
+        self.assertIn("sweepEmptyLayers", source)
         self.assertNotIn("COLORS_FILE", source)
         self.assertIn("left", source)
         self.assertIn("right", source)
+
+
+def _covers(path, corner):
+    (x0, y0), (x1, y1) = path["points_mm"]
+    x, y = corner
+    if abs(y0 - y1) < 0.001:
+        return abs(y - y0) < 0.001 and min(x0, x1) - 0.001 <= x <= max(x0, x1) + 0.001
+    return abs(x - x0) < 0.001 and min(y0, y1) - 0.001 <= y <= max(y0, y1) + 0.001
 
 
 def _inside_column(path, left, right):

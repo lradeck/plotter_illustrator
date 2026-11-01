@@ -84,9 +84,17 @@ def _moves(points, radius, overcut, turn, closed=True, passes=1):
     if len(points) < 2:
         raise ValueError("a path needs at least two points")
     if not closed:
+        # A straight stroke has no corner, so the knife is not swung.
+        # Further passes retrace the stroke with the knife still down.
         commands = ["U%d,%d" % points[0]]
-        for point in points:
-            commands.append("D%d,%d" % point)
+        forward = True
+        for _ in range(passes):
+            seq = points if forward else list(reversed(points))
+            if commands[-1][0] == "D":
+                seq = seq[1:]
+            for point in seq:
+                commands.append("D%d,%d" % point)
+            forward = not forward
         return " ".join(commands) + " "
     outline = _outline(points, radius)
     commands = []

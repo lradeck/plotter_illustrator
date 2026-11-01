@@ -12,6 +12,7 @@
 var __plotterScriptFile = $.fileName;
 var PYTHON = "C:/Users/Leon/AppData/Local/Programs/Python/Python38/python.exe";
 var PLOTTER_PY = "C:/Users/Leon/Downloads/doublecut/plotter/send_job.py";
+var COLOR_SETTINGS = "C:/Users/Leon/Downloads/doublecut/colors.json";
 /*__WORKER_START__*/
 var MM = 72 / 25.4;
 
@@ -30,7 +31,7 @@ function drawCard(jsonPath) {
             layer = layerForPath(doc, path);
             drawPath(layer, path, originX, originY);
         }
-        removeEmptyLayers(doc);
+        sweepContainer(doc, false);
         return "ok";
     } catch (eDraw) {
         return "ERR " + clean(eDraw.message);
@@ -40,15 +41,18 @@ function drawCard(jsonPath) {
 function scanColors(outPath) {
     try {
         if (!app.documents.length) return "nodoc";
+        sweepContainer(app.activeDocument, true);
         var found = harvest(app.activeDocument);
         var seen = {};
         var list = [];
-        var i, key;
+        var i, item, key;
         for (i = 0; i < found.paths.length; i++) {
-            key = rgbKey(found.paths[i].rgb);
+            item = found.paths[i];
+            if (isComplete(readLayerSettings(item.layers))) continue;
+            key = rgbKey(item.rgb);
             if (seen[key]) continue;
             seen[key] = true;
-            list.push(found.paths[i].rgb);
+            list.push(item.rgb);
         }
         if (!writeText(outPath, toJson(list))) return "ERR Farben konnten nicht gespeichert werden";
         return "ok " + list.length;
@@ -57,16 +61,18 @@ function scanColors(outPath) {
     }
 }
 
-function collectJob(jobPath, blade, turn, selectedOnly) {
+function collectJob(jobPath, blade, turn, selectedOnly, colorsPath) {
     try {
         if (!app.documents.length) return "nodoc";
         var onlyMarked = selectedOnly === true || selectedOnly === 1 || selectedOnly === "true";
+        var settings = settingsMap(colorsPath ? readJson(colorsPath) : null);
         var doc = app.activeDocument;
+        sweepContainer(doc, true);
         var board = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
         var found = harvest(doc);
         var paths = [];
         var skipped = found.skipped;
-        var i, item, passes, named, hasName;
+        var i, item, named, set;
         for (i = 0; i < found.paths.length; i++) {
             item = found.paths[i];
             if (onlyMarked && !item.marked) {
@@ -74,23 +80,24 @@ function collectJob(jobPath, blade, turn, selectedOnly) {
                 continue;
             }
             named = readLayerSettings(item.layers);
-            hasName = named.force !== null || named.speed !== null || named.travel !== null || named.passes !== null || named.holder || named.mode;
-            if (!hasName) {
+            if (isComplete(named)) {
+                paths.push(jobPathFrom(item, named.holder, named.mode || "cut", named.force, named.speed, named.travel, named.passes));
+                continue;
+            }
+            set = settings[rgbKey(item.rgb)];
+            if (!set) {
                 skipped++;
                 continue;
             }
-            passes = named.passes !== null ? named.passes : 1;
-            if (passes < 1) passes = 1;
-            paths.push({
-                holder: named.holder || "left",
-                mode: named.mode || "cut",
-                force: named.force !== null ? named.force : 20,
-                cut_speed: named.speed !== null ? named.speed : 20,
-                travel_speed: named.travel !== null ? named.travel : 20,
-                closed: item.closed,
-                passes: passes,
-                points_mm: item.points
-            });
+            paths.push(jobPathFrom(
+                item,
+                set.holder === "right" ? "right" : "left",
+                set.mode === "pen" || set.mode === "fold" ? set.mode : "cut",
+                whole(set.force, 20),
+                whole(set.speed, 20),
+                whole(set.travel, 20),
+                whole(set.passes, 1)
+            ));
         }
         var pageW = (board[2] - board[0]) / MM;
         var pageH = (board[1] - board[3]) / MM;
@@ -110,6 +117,30 @@ function collectJob(jobPath, blade, turn, selectedOnly) {
     }
 }
 
+function isComplete(named) {
+    return named.force !== null && named.speed !== null && named.travel !== null && named.passes !== null && !!named.holder;
+}
+
+function whole(value, fallback) {
+    var n = parseFloat(value);
+    if (isNaN(n)) return fallback;
+    return n;
+}
+
+function jobPathFrom(item, holder, mode, force, speed, travel, passes) {
+    if (passes < 1) passes = 1;
+    return {
+        holder: holder || "left",
+        mode: mode || "cut",
+        force: force,
+        cut_speed: speed,
+        travel_speed: travel,
+        closed: item.closed,
+        passes: passes,
+        points_mm: item.points
+    };
+}
+
 function drawPath(layer, path, originX, originY) {
     var item = layer.pathItems.add();
     var points = path.points_mm;
@@ -124,16 +155,10 @@ function drawPath(layer, path, originX, originY) {
     }
     item.closed = path.closed === true;
     var color = rgbColor(path.rgb);
-    if (path.mode === "pen") {
-        item.filled = false;
-        item.stroked = true;
-        item.strokeWidth = 0.35;
-        item.strokeColor = color;
-    } else {
-        item.stroked = false;
-        item.filled = true;
-        item.fillColor = color;
-    }
+    item.filled = false;
+    item.stroked = true;
+    item.strokeWidth = path.mode === "pen" ? 0.35 : 0.6;
+    item.strokeColor = color;
 }
 
 function harvest(doc) {
@@ -282,13 +307,58 @@ function ensureLayer(container, name) {
     return layer;
 }
 
-function removeEmptyLayers(doc) {
-    var i, layer;
-    for (i = doc.layers.length - 1; i >= 0; i--) {
-        if (doc.layers.length === 1) return;
-        layer = doc.layers[i];
-        if (layer.pageItems.length === 0 && layer.layers.length === 0) layer.remove();
+function sweepEmptyLayers(onlyGenerated) {
+    try {
+        if (!app.documents.length) return "nodoc";
+        var only = onlyGenerated === true || onlyGenerated === 1 || onlyGenerated === "true";
+        return "ok " + sweepContainer(app.activeDocument, only);
+    } catch (eSweep) {
+        return "ERR " + clean(eSweep.message);
     }
+}
+
+function sweepContainer(container, onlyGenerated) {
+    var removed = 0;
+    var layers = container.layers;
+    var i, layer;
+    if (!layers) return 0;
+    for (i = layers.length - 1; i >= 0; i--) {
+        layer = layers[i];
+        removed += sweepContainer(layer, onlyGenerated);
+        removeEmptyGroups(layer);
+        if (!layerIsEmpty(layer)) continue;
+        if (container.typename === "Document" && container.layers.length <= 1) continue;
+        if (onlyGenerated && !generatedLayerName(layer.name)) continue;
+        try {
+            layer.remove();
+            removed++;
+        } catch (eRemove) {}
+    }
+    return removed;
+}
+
+function removeEmptyGroups(container) {
+    var i, group;
+    if (!container.groupItems) return;
+    for (i = container.groupItems.length - 1; i >= 0; i--) {
+        group = container.groupItems[i];
+        removeEmptyGroups(group);
+        try {
+            if (group.pageItems.length === 0) group.remove();
+        } catch (eGroup) {}
+    }
+}
+
+function layerIsEmpty(layer) {
+    try {
+        return layer.pageItems.length === 0 && layer.layers.length === 0;
+    } catch (eEmpty) {
+        return false;
+    }
+}
+
+function generatedLayerName(name) {
+    return /^(Bereich\s+\d+|Left\b|Right\b)/i.test(String(name));
 }
 
 function holderFromName(name) {
@@ -378,12 +448,6 @@ function toMm(pt, originX, originY) {
 }
 
 function itemRgb(item) {
-    try {
-        if (item.filled) {
-            var fill = asRgb(item.fillColor);
-            if (fill) return fill;
-        }
-    } catch (eFill) {}
     try {
         if (item.stroked) return asRgb(item.strokeColor);
     } catch (eStroke) {}
@@ -686,6 +750,9 @@ function runIllustrator(call, done) {
     extraRow.add("statictext", undefined, "Drehen");
     var turnBox = extraRow.add("edittext", undefined, "1");
     turnBox.characters = 4;
+    extraRow.add("statictext", undefined, "Overcut");
+    var overBox = extraRow.add("edittext", undefined, "0");
+    overBox.characters = 4;
 
     var markedBox = w.add("checkbox", undefined, "Nur markierte Ebenen");
     markedBox.value = false;
@@ -716,7 +783,8 @@ function runIllustrator(call, done) {
             + " --force-min " + force.min + " --force-max " + force.max + " --force-step " + force.step
             + " --speed-min " + speed.min + " --speed-max " + speed.max + " --speed-step " + speed.step
             + " --pass-min " + passes.min + " --pass-max " + passes.max + " --pass-step " + passes.step
-            + " --travel " + travel;
+            + " --travel " + travel
+            + " --overcut " + fieldNumber(overBox, 0);
     }
 
     function makeSquares() {
@@ -769,7 +837,7 @@ function runIllustrator(call, done) {
         var turn = fieldNumber(turnBox, 1);
         var marked = markedBox.value ? "true" : "false";
         runIllustrator(
-            "return collectJob(" + jsString(jobPath) + "," + blade + "," + turn + "," + marked + ");",
+            "return collectJob(" + jsString(jobPath) + "," + blade + "," + turn + "," + marked + "," + jsString(COLOR_SETTINGS) + ");",
             function (msg) {
                 if (msg === "nodoc") {
                     busy = false;

@@ -34,22 +34,28 @@
     </div>
 
     <div class="range">
-        <span>Force</span>
-        <label for="force-min">von</label><input id="force-min" value="10">
-        <label for="force-max">bis</label><input id="force-max" value="25">
-        <label for="force-step">Schritt</label><input id="force-step" value="1">
+        <div class="range-name">Force</div>
+        <div class="line">
+            <label for="force-min">von</label><input id="force-min" value="10">
+            <label for="force-max">bis</label><input id="force-max" value="25">
+            <label for="force-step">Schritt</label><input id="force-step" value="1">
+        </div>
     </div>
     <div class="range">
-        <span>Speed</span>
-        <label for="speed-min">von</label><input id="speed-min" value="10">
-        <label for="speed-max">bis</label><input id="speed-max" value="50">
-        <label for="speed-step">Schritt</label><input id="speed-step" value="10">
+        <div class="range-name">Speed</div>
+        <div class="line">
+            <label for="speed-min">von</label><input id="speed-min" value="10">
+            <label for="speed-max">bis</label><input id="speed-max" value="50">
+            <label for="speed-step">Schritt</label><input id="speed-step" value="10">
+        </div>
     </div>
     <div class="range">
-        <span>Durchgaenge</span>
-        <label for="pass-min">von</label><input id="pass-min" value="1">
-        <label for="pass-max">bis</label><input id="pass-max" value="3">
-        <label for="pass-step">Schritt</label><input id="pass-step" value="1">
+        <div class="range-name">Durchgaenge</div>
+        <div class="line">
+            <label for="pass-min">von</label><input id="pass-min" value="1">
+            <label for="pass-max">bis</label><input id="pass-max" value="3">
+            <label for="pass-step">Schritt</label><input id="pass-step" value="1">
+        </div>
     </div>
 
     <div class="machine">
@@ -57,6 +63,7 @@
         <label for="pen">Stift-Force</label><input id="pen" value="10">
         <label for="blade">Klinge mm</label><input id="blade" value="0.35">
         <label for="turn">Drehen mm</label><input id="turn" value="1">
+        <label for="overcut" title="0 zeichnet ein geschlossenes Quadrat. Ein Wert darueber zeichnet vier Linien, die um diese Millimeter an den Ecken ueberstehen.">Overcut mm</label><input id="overcut" value="0" title="0 zeichnet ein geschlossenes Quadrat. Ein Wert darueber zeichnet vier Linien, die um diese Millimeter an den Ecken ueberstehen.">
     </div>
 
     <label class="check" for="marked">
@@ -64,7 +71,31 @@
         Nur markierte Ebenen
     </label>
 
-    <div id="status">Ebenenname z.B. Left F10 S20 T20 x1. Aendern und Plot. Stift oder Falz im Namen wechselt die Art.</div>
+    <div class="colorhead">
+        <span>Strichfarben</span>
+        <button id="reread" type="button">Lesen</button>
+    </div>
+    <ul id="colors"></ul>
+    <div class="fields">
+        <label for="holder">Halter</label>
+        <select id="holder">
+            <option value="left">links</option>
+            <option value="right">rechts</option>
+        </select>
+        <label for="force">F</label><input id="force" value="20">
+        <label for="speed">S</label><input id="speed" value="20">
+        <label for="travel-set">T</label><input id="travel-set" value="20">
+        <label for="passes">x</label><input id="passes" value="1">
+        <label for="mode">Art</label>
+        <select id="mode">
+            <option value="cut">schneiden</option>
+            <option value="pen">stift</option>
+            <option value="fold">falzen</option>
+        </select>
+        <button id="apply" type="button">Uebernehmen</button>
+    </div>
+
+    <div id="status">Vollstaendiger Name Left F10 S20 T20 x1 gilt zuerst. Sonst die Strichfarbe. Lesen holt Farben von unvollstaendigen Ebenen.</div>
 
     <script src="js/CSInterface.js"></script>
     <script>window.nodeRequire = (typeof require === "function") ? require : null;</script>
