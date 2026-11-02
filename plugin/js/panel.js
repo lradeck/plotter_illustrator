@@ -853,6 +853,31 @@ document.getElementById("offset").addEventListener("change", function () { syncA
 document.getElementById("cfg-offset").addEventListener("change", function () { syncAngleFrom("cfg-offset", "cfg-angle"); });
 document.getElementById("square-angle").addEventListener("change", function () { applyAngle("square-angle", "square-offset"); });
 document.getElementById("square-offset").addEventListener("change", function () { syncAngleFrom("square-offset", "square-angle"); });
+document.getElementById("add-cutover").addEventListener("click", function () {
+    var mm = numberValue("cutover", 0);
+    if (mm <= 0) {
+        setStatus("Cut over in mm angeben.");
+        return;
+    }
+    evalHost("addCutOver(" + mm + ")", function (msg) {
+        if (msg === "nodoc") setStatus("Kein Dokument offen.");
+        else if (msg === "nosel") setStatus("Erst eine Form selektieren.");
+        else if (msg === "none") setStatus("Keine Aussenecke gefunden.");
+        else if (msg.indexOf("ok") === 0) setStatus("Cut over: " + msg.split(" ")[1] + " Pfade.");
+        else setStatus(msg);
+        refreshColors(function () {});
+    });
+});
+document.getElementById("split-inward").addEventListener("click", function () {
+    evalHost("splitInward()", function (msg) {
+        if (msg === "nodoc") setStatus("Kein Dokument offen.");
+        else if (msg === "nosel") setStatus("Erst eine Form selektieren.");
+        else if (msg === "none") setStatus("Keine Innen-Spitze gefunden.");
+        else if (msg.indexOf("ok") === 0) setStatus("Innen-Spitzen: " + msg.split(" ")[1] + " Pfade.");
+        else setStatus(msg);
+        refreshColors(function () {});
+    });
+});
 document.getElementById("color-load").addEventListener("click", loadColorConfig);
 document.getElementById("plot").addEventListener("click", plot);
 document.getElementById("apply").addEventListener("click", function () {

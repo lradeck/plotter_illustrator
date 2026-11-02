@@ -1,0 +1,589 @@
+var WELD_PT = 2;
+
+function planCut(specs, extendPt, inward) {
+    var strokes = [];
+    var removeMap = {};
+    var i, out, s, chain, grew, shares;
+    if (!specs) return { strokes: strokes, remove: [] };
+    for (i = 0; i < specs.length; i++) {
+        if (!specs[i] || !specs[i].closed || !specs[i].verts || specs[i].verts.length < 2) continue;
+        out = cutVerts(specs[i].verts, true, extendPt, inward);
+        for (s = 0; s < out.length; s++) strokes.push({ source: i, verts: out[s] });
+        if (out.length) removeMap[i] = true;
+    }
+    var chains = weldChains(specs);
+    for (i = 0; i < chains.length; i++) {
+        chain = chains[i];
+        chain.strokes = cutVerts(chain.verts, chain.closed, extendPt, inward);
+        if (chain.strokes.length) markSources(removeMap, chain.sources);
+    }
+    grew = true;
+    while (grew) {
+        grew = false;
+        for (i = 0; i < chains.length; i++) {
+            chain = chains[i];
+            if (chain.strokes.length || chain.kept) continue;
+            shares = sharesSource(chain.sources, removeMap);
+            if (!shares) continue;
+            chain.kept = true;
+            if (chain.verts.length >= 2) strokes.push({ source: chain.sources[0], verts: chain.verts });
+            markSources(removeMap, chain.sources);
+            grew = true;
+        }
+    }
+    for (i = 0; i < chains.length; i++) {
+        chain = chains[i];
+        for (s = 0; s < chain.strokes.length; s++) {
+            strokes.push({ source: chain.sources[0], verts: chain.strokes[s] });
+        }
+    }
+    return { strokes: strokes, remove: mapKeys(removeMap) };
+}
+
+function markSources(map, sources) {
+    var i;
+    for (i = 0; i < sources.length; i++) map[sources[i]] = true;
+}
+
+function sharesSource(sources, map) {
+    var i;
+    for (i = 0; i < sources.length; i++) if (map[sources[i]]) return true;
+    return false;
+}
+
+function mapKeys(map) {
+    var keys = [];
+    var key;
+    for (key in map) {
+        if (map.hasOwnProperty(key) && map[key]) keys.push(Number(key));
+    }
+    return keys;
+}
+
+function cutVerts(verts, closed, extendPt, inward) {
+    var n = verts.length;
+    if (n < 2) return [];
+    var area = closed ? ringArea(verts) : 0;
+    if (closed && Math.abs(area) < 0.001) area = 1;
+    var i;
+    var concave = 0;
+    for (i = 0; i < n; i++) {
+        verts[i].role = cornerRole(verts, i, closed, area, inward);
+        if (verts[i].role === "concave") concave++;
+    }
+    if (inward && !concave) return [];
+    var breaks = [];
+    for (i = 0; i < n; i++) {
+        if (verts[i].role === "convex" && (extendPt > 0 || inward)) breaks.push(i);
+        else if (verts[i].role === "concave" && inward) breaks.push(i);
+    }
+    if (!breaks.length) return [];
+    var runs = closed ? closedRuns(verts, breaks) : openRuns(verts, breaks);
+    var out = [];
+    var built;
+    for (i = 0; i < runs.length; i++) {
+        built = finishRun(runs[i], extendPt, inward);
+        if (built && built.length >= 2) out.push(built);
+    }
+    return out;
+}
+
+function ringArea(verts) {
+    var sum = 0;
+    var i, a, b, n = verts.length;
+    for (i = 0; i < n; i++) {
+        a = verts[i].anchor;
+        b = verts[(i + 1) % n].anchor;
+        sum += a[0] * b[1] - b[0] * a[1];
+    }
+    return sum / 2;
+}
+
+function cornerRole(verts, index, closed, area, inward) {
+    var n = verts.length;
+    if (!closed && (index === 0 || index === n - 1)) {
+        if (verts[index].joint) return inward ? "concave" : "convex";
+        return "flat";
+    }
+    var prev = verts[(index - 1 + n) % n];
+    var here = verts[index];
+    var next = verts[(index + 1) % n];
+    var into = arrivalDir(prev, here);
+    var out = departDir(here, next);
+    var lenIn = Math.sqrt(into[0] * into[0] + into[1] * into[1]);
+    var lenOut = Math.sqrt(out[0] * out[0] + out[1] * out[1]);
+    if (lenIn < 0.2 || lenOut < 0.2) return "flat";
+    var cos = (into[0] * out[0] + into[1] * out[1]) / (lenIn * lenOut);
+    if (cos > 0.978) return "flat";
+    if (!closed) return inward ? "concave" : "convex";
+    var cross = into[0] * out[1] - into[1] * out[0];
+    return cross * area >= 0 ? "convex" : "concave";
+}
+
+function cloneVert(v) {
+    return {
+        anchor: [v.anchor[0], v.anchor[1]],
+        left: [v.left[0], v.left[1]],
+        right: [v.right[0], v.right[1]],
+        corner: v.corner,
+        role: v.role,
+        joint: v.joint === true
+    };
+}
+
+function closedRuns(verts, breaks) {
+    var runs = [];
+    var k, start, end, pts, i, guard, n;
+    n = verts.length;
+    for (k = 0; k < breaks.length; k++) {
+        start = breaks[k];
+        end = breaks[(k + 1) % breaks.length];
+        pts = [cloneVert(verts[start])];
+        i = start;
+        guard = 0;
+        while (guard < n + 1) {
+            i = (i + 1) % n;
+            pts.push(cloneVert(verts[i]));
+            guard++;
+            if (i === end) break;
+        }
+        runs.push(pts);
+    }
+    return runs;
+}
+
+function openRuns(verts, breaks) {
+    var stops = [];
+    var k;
+    if (breaks[0] !== 0) stops.push(0);
+    for (k = 0; k < breaks.length; k++) stops.push(breaks[k]);
+    if (stops[stops.length - 1] !== verts.length - 1) stops.push(verts.length - 1);
+    var runs = [];
+    var pts, i;
+    for (k = 0; k < stops.length - 1; k++) {
+        pts = [];
+        for (i = stops[k]; i <= stops[k + 1]; i++) pts.push(cloneVert(verts[i]));
+        runs.push(pts);
+    }
+    return runs;
+}
+
+function finishRun(pts, extendPt, inward) {
+    if (!pts || pts.length < 2) return null;
+    if (inward && pts[pts.length - 1].role === "concave" && pts[0].role !== "concave") reverseRun(pts);
+    if (extendPt > 0) {
+        if (pts[0].role === "convex") pts.unshift(extendBack(pts[0], pts[1], extendPt));
+        if (pts[pts.length - 1].role === "convex") pts.push(extendForward(pts[pts.length - 2], pts[pts.length - 1], extendPt));
+    }
+    return pts;
+}
+
+function reverseRun(pts) {
+    var i, v, tmp;
+    pts.reverse();
+    for (i = 0; i < pts.length; i++) {
+        v = pts[i];
+        tmp = v.left;
+        v.left = v.right;
+        v.right = tmp;
+    }
+}
+
+function departDir(here, next) {
+    var d = [here.right[0] - here.anchor[0], here.right[1] - here.anchor[1]];
+    if (d[0] * d[0] + d[1] * d[1] < 0.01) d = [next.left[0] - here.anchor[0], next.left[1] - here.anchor[1]];
+    if (d[0] * d[0] + d[1] * d[1] < 0.01) d = [next.anchor[0] - here.anchor[0], next.anchor[1] - here.anchor[1]];
+    return d;
+}
+
+function arrivalDir(prev, here) {
+    var d = [here.anchor[0] - here.left[0], here.anchor[1] - here.left[1]];
+    if (d[0] * d[0] + d[1] * d[1] < 0.01) d = [here.anchor[0] - prev.right[0], here.anchor[1] - prev.right[1]];
+    if (d[0] * d[0] + d[1] * d[1] < 0.01) d = [here.anchor[0] - prev.anchor[0], here.anchor[1] - prev.anchor[1]];
+    return d;
+}
+
+function extendBack(corner, next, dist) {
+    var dir = departDir(corner, next);
+    return pointBeyond(corner.anchor, [-dir[0], -dir[1]], dist);
+}
+
+function extendForward(prev, corner, dist) {
+    return pointBeyond(corner.anchor, arrivalDir(prev, corner), dist);
+}
+
+function pointBeyond(anchor, dir, dist) {
+    var len = Math.sqrt(dir[0] * dir[0] + dir[1] * dir[1]);
+    var scale = len < 0.01 ? 0 : dist / len;
+    var at = [anchor[0] + dir[0] * scale, anchor[1] + dir[1] * scale];
+    return { anchor: at, left: at, right: at, corner: true, role: "ext", joint: false };
+}
+
+function weldChains(specs) {
+    var raw = [];
+    var i, k, verts;
+    for (i = 0; i < specs.length; i++) {
+        if (!specs[i] || specs[i].closed || !specs[i].verts || specs[i].verts.length < 2) continue;
+        verts = specs[i].verts;
+        for (k = 0; k < verts.length - 1; k++) raw.push(edgeFrom(verts[k], verts[k + 1], i));
+    }
+    raw = splitEdges(raw);
+    var built = clusterEdges(raw);
+    return walkChains(built.edges, built.clusters);
+}
+
+function edgeFrom(v0, v1, source) {
+    return {
+        ax: v0.anchor[0], ay: v0.anchor[1],
+        bx: v1.anchor[0], by: v1.anchor[1],
+        hax: v0.right[0], hay: v0.right[1],
+        hbx: v1.left[0], hby: v1.left[1],
+        cornerA: v0.corner !== false,
+        cornerB: v1.corner !== false,
+        source: source,
+        sources: [source]
+    };
+}
+
+function splitEdges(raw) {
+    var splits = [];
+    var i, j, cross, out, ts, prev, p, q, piece;
+    for (i = 0; i < raw.length; i++) splits.push([]);
+    for (i = 0; i < raw.length; i++) {
+        for (j = i + 1; j < raw.length; j++) {
+            if (!isStraight(raw[i]) || !isStraight(raw[j])) continue;
+            cross = properCross(raw[i], raw[j]);
+            if (cross && awayFromEnds(raw[i], cross.t) && awayFromEnds(raw[j], cross.u)) {
+                splits[i].push(cross.t);
+                splits[j].push(cross.u);
+            }
+            endpointOn(raw[i], raw[j].ax, raw[j].ay, splits[i]);
+            endpointOn(raw[i], raw[j].bx, raw[j].by, splits[i]);
+            endpointOn(raw[j], raw[i].ax, raw[i].ay, splits[j]);
+            endpointOn(raw[j], raw[i].bx, raw[i].by, splits[j]);
+        }
+    }
+    out = [];
+    for (i = 0; i < raw.length; i++) {
+        ts = uniqueTs(splits[i]);
+        if (!ts.length || !isStraight(raw[i])) {
+            out.push(raw[i]);
+            continue;
+        }
+        prev = 0;
+        ts.push(1);
+        for (j = 0; j < ts.length; j++) {
+            p = pointAt(raw[i], prev);
+            q = pointAt(raw[i], ts[j]);
+            piece = {
+                ax: p[0], ay: p[1], bx: q[0], by: q[1],
+                hax: p[0], hay: p[1], hbx: q[0], hby: q[1],
+                cornerA: true, cornerB: true,
+                source: raw[i].source,
+                sources: copySources(raw[i].sources)
+            };
+            if (span2(piece) > 0.04) out.push(piece);
+            prev = ts[j];
+        }
+    }
+    return out;
+}
+
+function isStraight(e) {
+    return near2(e.hax, e.hay, e.ax, e.ay) && near2(e.hbx, e.hby, e.bx, e.by);
+}
+
+function near2(x, y, px, py) {
+    var dx = x - px;
+    var dy = y - py;
+    return dx * dx + dy * dy < 0.56;
+}
+
+function span2(e) {
+    var dx = e.bx - e.ax;
+    var dy = e.by - e.ay;
+    return dx * dx + dy * dy;
+}
+
+function awayFromEnds(e, t) {
+    var len = Math.sqrt(span2(e));
+    return t * len > WELD_PT && (1 - t) * len > WELD_PT;
+}
+
+function properCross(a, b) {
+    var dax = a.bx - a.ax;
+    var day = a.by - a.ay;
+    var dbx = b.bx - b.ax;
+    var dby = b.by - b.ay;
+    var den = dax * dby - day * dbx;
+    if (Math.abs(den) < 1e-8) return null;
+    var dx = b.ax - a.ax;
+    var dy = b.ay - a.ay;
+    var t = (dx * dby - dy * dbx) / den;
+    var u = (dx * day - dy * dax) / den;
+    if (t <= 0 || t >= 1 || u <= 0 || u >= 1) return null;
+    return { t: t, u: u };
+}
+
+function endpointOn(edge, x, y, into) {
+    var dx = edge.bx - edge.ax;
+    var dy = edge.by - edge.ay;
+    var len2 = dx * dx + dy * dy;
+    var t, qx, qy, ex, ey, len;
+    if (len2 < 1e-6) return;
+    t = ((x - edge.ax) * dx + (y - edge.ay) * dy) / len2;
+    qx = edge.ax + t * dx;
+    qy = edge.ay + t * dy;
+    ex = x - qx;
+    ey = y - qy;
+    if (ex * ex + ey * ey > WELD_PT * WELD_PT) return;
+    len = Math.sqrt(len2);
+    if (t * len <= WELD_PT || (1 - t) * len <= WELD_PT) return;
+    into.push(t);
+}
+
+function uniqueTs(list) {
+    var sorted = [];
+    var i, out;
+    for (i = 0; i < list.length; i++) sorted.push(list[i]);
+    sorted.sort(function (a, b) { return a - b; });
+    out = [];
+    for (i = 0; i < sorted.length; i++) {
+        if (sorted[i] <= 0.001 || sorted[i] >= 0.999) continue;
+        if (!out.length || sorted[i] - out[out.length - 1] > 0.002) out.push(sorted[i]);
+    }
+    return out;
+}
+
+function pointAt(e, t) {
+    return [e.ax + (e.bx - e.ax) * t, e.ay + (e.by - e.ay) * t];
+}
+
+function copySources(sources) {
+    var out = [];
+    var i;
+    for (i = 0; i < sources.length; i++) out.push(sources[i]);
+    return out;
+}
+
+function clusterEdges(raw) {
+    var pts = [];
+    var parent = [];
+    var i, a, b, dx, dy, clusters, idOf, root, map, edges, seen, key, at;
+    for (i = 0; i < raw.length; i++) {
+        pts.push({ x: raw[i].ax, y: raw[i].ay });
+        pts.push({ x: raw[i].bx, y: raw[i].by });
+        parent.push(parent.length);
+        parent.push(parent.length);
+    }
+    function find(n) {
+        while (parent[n] !== n) {
+            parent[n] = parent[parent[n]];
+            n = parent[n];
+        }
+        return n;
+    }
+    function unite(p, q) {
+        var rp = find(p);
+        var rq = find(q);
+        if (rp !== rq) parent[rq] = rp;
+    }
+    for (a = 0; a < pts.length; a++) {
+        for (b = a + 1; b < pts.length; b++) {
+            dx = pts[a].x - pts[b].x;
+            dy = pts[a].y - pts[b].y;
+            if (dx * dx + dy * dy <= WELD_PT * WELD_PT) unite(a, b);
+        }
+    }
+    clusters = [];
+    idOf = [];
+    map = {};
+    for (i = 0; i < pts.length; i++) {
+        root = find(i);
+        if (map[root] === undefined) {
+            map[root] = clusters.length;
+            clusters.push({ x: 0, y: 0, n: 0 });
+        }
+        idOf[i] = map[root];
+        clusters[map[root]].x += pts[i].x;
+        clusters[map[root]].y += pts[i].y;
+        clusters[map[root]].n += 1;
+    }
+    for (i = 0; i < clusters.length; i++) {
+        clusters[i].x /= clusters[i].n;
+        clusters[i].y /= clusters[i].n;
+    }
+    edges = [];
+    seen = {};
+    for (i = 0; i < raw.length; i++) {
+        raw[i].ca = idOf[i * 2];
+        raw[i].cb = idOf[i * 2 + 1];
+        if (raw[i].ca === raw[i].cb) continue;
+        key = raw[i].ca < raw[i].cb ? raw[i].ca + ":" + raw[i].cb : raw[i].cb + ":" + raw[i].ca;
+        if (seen[key] === undefined) {
+            seen[key] = edges.length;
+            edges.push(raw[i]);
+        } else {
+            at = seen[key];
+            addSources(edges[at].sources, raw[i].sources);
+        }
+    }
+    return { edges: edges, clusters: clusters };
+}
+
+function addSources(into, extra) {
+    var i, k, known;
+    for (i = 0; i < extra.length; i++) {
+        known = false;
+        for (k = 0; k < into.length; k++) if (into[k] === extra[i]) known = true;
+        if (!known) into.push(extra[i]);
+    }
+}
+
+function walkChains(edges, clusters) {
+    var adj = [];
+    var used = [];
+    var chains = [];
+    var i, ei, start;
+    for (i = 0; i < clusters.length; i++) adj.push([]);
+    for (ei = 0; ei < edges.length; ei++) {
+        adj[edges[ei].ca].push(ei);
+        adj[edges[ei].cb].push(ei);
+        used.push(false);
+    }
+    function edgeVec(edgeIndex, fromCluster) {
+        var e = edges[edgeIndex];
+        var other = e.ca === fromCluster ? e.cb : e.ca;
+        return [clusters[other].x - clusters[fromCluster].x, clusters[other].y - clusters[fromCluster].y];
+    }
+    function continueAt(cluster, incoming) {
+        var links = adj[cluster];
+        var others = [];
+        var n, from, travel, tlen, best, bestCos, leave, llen, cos;
+        for (n = 0; n < links.length; n++) if (links[n] !== incoming) others.push(links[n]);
+        if (!others.length) return null;
+        if (links.length === 2) return others[0];
+        from = edges[incoming].ca === cluster ? edges[incoming].cb : edges[incoming].ca;
+        travel = edgeVec(incoming, from);
+        tlen = Math.sqrt(travel[0] * travel[0] + travel[1] * travel[1]);
+        if (tlen < 1e-6) return null;
+        best = null;
+        bestCos = 0.978;
+        for (n = 0; n < others.length; n++) {
+            leave = edgeVec(others[n], cluster);
+            llen = Math.sqrt(leave[0] * leave[0] + leave[1] * leave[1]);
+            if (llen < 1e-6) continue;
+            cos = (travel[0] * leave[0] + travel[1] * leave[1]) / (tlen * llen);
+            if (cos > bestCos) {
+                bestCos = cos;
+                best = others[n];
+            }
+        }
+        return best;
+    }
+    function freeEnd(edgeIndex) {
+        var e = edges[edgeIndex];
+        if (continueAt(e.ca, edgeIndex) === null) return e.ca;
+        if (continueAt(e.cb, edgeIndex) === null) return e.cb;
+        return null;
+    }
+    function walkFrom(startEi, startFrom) {
+        var seq = [];
+        var edgeIndex = startEi;
+        var from = startFrom;
+        var guard = 0;
+        var closed = false;
+        var e, to, next, jointStart, jointEnd;
+        while (guard < edges.length + 2) {
+            guard++;
+            if (used[edgeIndex]) break;
+            e = edges[edgeIndex];
+            to = e.ca === from ? e.cb : e.ca;
+            used[edgeIndex] = true;
+            seq.push({ ei: edgeIndex, from: from, to: to });
+            next = continueAt(to, edgeIndex);
+            if (next === null) break;
+            if (next === startEi && to === startFrom) {
+                closed = true;
+                break;
+            }
+            if (used[next]) break;
+            from = to;
+            edgeIndex = next;
+        }
+        jointStart = false;
+        jointEnd = false;
+        if (!closed && seq.length) {
+            jointStart = adj[seq[0].from].length >= 3;
+            jointEnd = adj[seq[seq.length - 1].to].length >= 3;
+        }
+        return {
+            seq: seq,
+            closed: closed,
+            jointStart: jointStart,
+            jointEnd: jointEnd,
+            verts: chainVerts(seq, closed, jointStart, jointEnd),
+            sources: chainSources(seq)
+        };
+    }
+    function chainSources(seq) {
+        var src = [];
+        var n, m, e;
+        for (n = 0; n < seq.length; n++) {
+            e = edges[seq[n].ei];
+            for (m = 0; m < e.sources.length; m++) addSources(src, [e.sources[m]]);
+        }
+        return src;
+    }
+    function makeVert(clusterId, leftOff, rightOff, corner, joint) {
+        var c = clusters[clusterId];
+        return {
+            anchor: [c.x, c.y],
+            left: [c.x + leftOff[0], c.y + leftOff[1]],
+            right: [c.x + rightOff[0], c.y + rightOff[1]],
+            corner: corner !== false,
+            role: "flat",
+            joint: joint === true
+        };
+    }
+    function chainVerts(seq, closed, jointStart, jointEnd) {
+        var verts = [];
+        var n, e, from, forward, dep, arr, prev;
+        for (n = 0; n < seq.length; n++) {
+            e = edges[seq[n].ei];
+            from = seq[n].from;
+            forward = e.ca === from;
+            dep = forward ? [e.hax - e.ax, e.hay - e.ay] : [e.hbx - e.bx, e.hby - e.by];
+            arr = forward ? [e.hbx - e.bx, e.hby - e.by] : [e.hax - e.ax, e.hay - e.ay];
+            seq[n].dep = dep;
+            seq[n].arr = arr;
+            seq[n].cornerFrom = forward ? e.cornerA : e.cornerB;
+            seq[n].cornerTo = forward ? e.cornerB : e.cornerA;
+        }
+        if (closed) {
+            for (n = 0; n < seq.length; n++) {
+                prev = seq[(n - 1 + seq.length) % seq.length];
+                verts.push(makeVert(seq[n].from, prev.arr, seq[n].dep, seq[n].cornerFrom, false));
+            }
+            return verts;
+        }
+        for (n = 0; n < seq.length; n++) {
+            prev = n === 0 ? [0, 0] : seq[n - 1].arr;
+            verts.push(makeVert(seq[n].from, prev, seq[n].dep, seq[n].cornerFrom, n === 0 && jointStart));
+        }
+        e = seq[seq.length - 1];
+        verts.push(makeVert(e.to, e.arr, [0, 0], e.cornerTo, jointEnd));
+        return verts;
+    }
+    for (ei = 0; ei < edges.length; ei++) {
+        if (used[ei]) continue;
+        start = freeEnd(ei);
+        if (start === null) continue;
+        chains.push(walkFrom(ei, start));
+    }
+    for (ei = 0; ei < edges.length; ei++) {
+        if (used[ei]) continue;
+        chains.push(walkFrom(ei, edges[ei].ca));
+    }
+    return chains;
+}

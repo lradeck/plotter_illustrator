@@ -850,6 +850,281 @@ function toJson(value) {
 function quote(text) {
     return "\"" + String(text).replace(/\\/g, "\\\\").replace(/\"/g, "\\\"") + "\"";
 }
+
+function addCutOver(mm) {
+    return editSelection(Number(mm), false);
+}
+
+function splitInward() {
+    return editSelection(0, true);
+}
+
+function editSelection(cutoverMm, inward) {
+    try {
+        if (!app.documents.length) return "nodoc";
+        if (!(cutoverMm > 0) && !inward) return "none";
+        var paths = selectedPaths();
+        if (!paths.length) return "nosel";
+        var made = 0;
+        var i;
+        for (i = 0; i < paths.length; i++) {
+            try {
+                if (!paths[i].pathPoints || paths[i].pathPoints.length < 2) continue;
+            } catch (eGone) {
+                continue;
+            }
+            made += editOnePath(paths[i], cutoverMm > 0 ? cutoverMm : 0, inward);
+        }
+        logLine((inward ? "split-inward" : "cutover " + cutoverMm) + " made " + made);
+        app.redraw();
+        return made ? "ok " + made : "none";
+    } catch (eEdit) {
+        logLine("edit ERR " + clean(eEdit.message));
+        return "ERR " + clean(eEdit.message);
+    }
+}
+
+function selectedPaths() {
+    var found = [];
+    var sel = app.activeDocument.selection;
+    var i;
+    if (!sel) return found;
+    for (i = 0; i < sel.length; i++) collectPathItems(sel[i], found);
+    return found;
+}
+
+function collectPathItems(item, found) {
+    var i;
+    if (!item) return;
+    if (item.typename === "PathItem") {
+        if (!item.guides && !item.clipping) found.push(item);
+    } else if (item.typename === "CompoundPathItem") {
+        for (i = 0; i < item.pathItems.length; i++) collectPathItems(item.pathItems[i], found);
+    } else if (item.typename === "GroupItem") {
+        for (i = 0; i < item.pageItems.length; i++) collectPathItems(item.pageItems[i], found);
+    }
+}
+
+function editOnePath(item, cutoverMm, inward) {
+    var verts = readVerts(item);
+    var closed = item.closed === true;
+    var n = verts.length;
+    if (n < 2) return 0;
+    var area = closed ? ringArea(verts) : 0;
+    if (closed && Math.abs(area) < 0.001) area = 1;
+    var i;
+    var concave = 0;
+    for (i = 0; i < n; i++) {
+        verts[i].role = cornerRole(verts, i, closed, area, inward);
+        if (verts[i].role === "concave") concave++;
+    }
+    if (inward && !concave) return 0;
+    var breaks = [];
+    for (i = 0; i < n; i++) {
+        if (verts[i].role === "convex" && (cutoverMm > 0 || inward)) breaks.push(i);
+        else if (verts[i].role === "concave" && inward) breaks.push(i);
+    }
+    if (!breaks.length) return 0;
+    var runs = closed ? closedRuns(verts, breaks) : openRuns(verts, breaks);
+    var layer = item.layer;
+    var made = 0;
+    var r, built, neu;
+    for (r = 0; r < runs.length; r++) {
+        built = finishRun(runs[r], cutoverMm, inward);
+        if (!built || built.length < 2) continue;
+        neu = layer.pathItems.add();
+        neu.closed = false;
+        writeRun(neu, built);
+        copyAppearance(item, neu);
+        made++;
+    }
+    if (made) item.remove();
+    return made;
+}
+
+function readVerts(item) {
+    var pts = item.pathPoints;
+    var verts = [];
+    var i, p;
+    for (i = 0; i < pts.length; i++) {
+        p = pts[i];
+        verts.push({
+            anchor: [p.anchor[0], p.anchor[1]],
+            left: [p.leftDirection[0], p.leftDirection[1]],
+            right: [p.rightDirection[0], p.rightDirection[1]],
+            corner: p.pointType === PointType.CORNER,
+            role: "flat"
+        });
+    }
+    return verts;
+}
+
+function ringArea(verts) {
+    var sum = 0;
+    var i, a, b, n = verts.length;
+    for (i = 0; i < n; i++) {
+        a = verts[i].anchor;
+        b = verts[(i + 1) % n].anchor;
+        sum += a[0] * b[1] - b[0] * a[1];
+    }
+    return sum / 2;
+}
+
+function cornerRole(verts, index, closed, area, inward) {
+    var n = verts.length;
+    if (!closed && (index === 0 || index === n - 1)) return "flat";
+    var prev = verts[(index - 1 + n) % n];
+    var here = verts[index];
+    var next = verts[(index + 1) % n];
+    if (!here.corner || !nearPt(here.left, here.anchor) || !nearPt(here.right, here.anchor)) return "curve";
+    var into = [here.anchor[0] - prev.anchor[0], here.anchor[1] - prev.anchor[1]];
+    var out = [next.anchor[0] - here.anchor[0], next.anchor[1] - here.anchor[1]];
+    var lenIn = Math.sqrt(into[0] * into[0] + into[1] * into[1]);
+    var lenOut = Math.sqrt(out[0] * out[0] + out[1] * out[1]);
+    if (lenIn < 0.2 || lenOut < 0.2) return "flat";
+    var cos = (into[0] * out[0] + into[1] * out[1]) / (lenIn * lenOut);
+    if (cos > 0.978) return "flat";
+    if (!closed) return inward ? "concave" : "convex";
+    var cross = into[0] * out[1] - into[1] * out[0];
+    return cross * area >= 0 ? "convex" : "concave";
+}
+
+function nearPt(a, b) {
+    var dx = a[0] - b[0];
+    var dy = a[1] - b[1];
+    return dx * dx + dy * dy < 0.25;
+}
+
+function cloneVert(v) {
+    return {
+        anchor: [v.anchor[0], v.anchor[1]],
+        left: [v.left[0], v.left[1]],
+        right: [v.right[0], v.right[1]],
+        corner: v.corner,
+        role: v.role
+    };
+}
+
+function closedRuns(verts, breaks) {
+    var runs = [];
+    var k, start, end, pts, i, guard, n;
+    n = verts.length;
+    for (k = 0; k < breaks.length; k++) {
+        start = breaks[k];
+        end = breaks[(k + 1) % breaks.length];
+        pts = [cloneVert(verts[start])];
+        i = start;
+        guard = 0;
+        while (guard < n + 1) {
+            i = (i + 1) % n;
+            pts.push(cloneVert(verts[i]));
+            guard++;
+            if (i === end) break;
+        }
+        runs.push(pts);
+    }
+    return runs;
+}
+
+function openRuns(verts, breaks) {
+    var stops = [];
+    var k;
+    if (breaks[0] !== 0) stops.push(0);
+    for (k = 0; k < breaks.length; k++) stops.push(breaks[k]);
+    if (stops[stops.length - 1] !== verts.length - 1) stops.push(verts.length - 1);
+    var runs = [];
+    var pts, i;
+    for (k = 0; k < stops.length - 1; k++) {
+        pts = [];
+        for (i = stops[k]; i <= stops[k + 1]; i++) pts.push(cloneVert(verts[i]));
+        runs.push(pts);
+    }
+    return runs;
+}
+
+function finishRun(pts, cutoverMm, inward) {
+    if (!pts || pts.length < 2) return null;
+    if (inward && pts[pts.length - 1].role === "concave" && pts[0].role !== "concave") reverseRun(pts);
+    if (cutoverMm > 0) {
+        if (pts[0].role === "convex") pts.unshift(extendBack(pts[0], pts[1], cutoverMm));
+        if (pts[pts.length - 1].role === "convex") pts.push(extendForward(pts[pts.length - 2], pts[pts.length - 1], cutoverMm));
+    }
+    return pts;
+}
+
+function reverseRun(pts) {
+    var i, v, tmp;
+    pts.reverse();
+    for (i = 0; i < pts.length; i++) {
+        v = pts[i];
+        tmp = v.left;
+        v.left = v.right;
+        v.right = tmp;
+    }
+}
+
+function departDir(here, next) {
+    var d = [here.right[0] - here.anchor[0], here.right[1] - here.anchor[1]];
+    if (d[0] * d[0] + d[1] * d[1] < 0.01) d = [next.left[0] - here.anchor[0], next.left[1] - here.anchor[1]];
+    if (d[0] * d[0] + d[1] * d[1] < 0.01) d = [next.anchor[0] - here.anchor[0], next.anchor[1] - here.anchor[1]];
+    return d;
+}
+
+function arrivalDir(prev, here) {
+    var d = [here.anchor[0] - here.left[0], here.anchor[1] - here.left[1]];
+    if (d[0] * d[0] + d[1] * d[1] < 0.01) d = [here.anchor[0] - prev.right[0], here.anchor[1] - prev.right[1]];
+    if (d[0] * d[0] + d[1] * d[1] < 0.01) d = [here.anchor[0] - prev.anchor[0], here.anchor[1] - prev.anchor[1]];
+    return d;
+}
+
+function extendBack(corner, next, mm) {
+    var dir = departDir(corner, next);
+    return pointBeyond(corner.anchor, [-dir[0], -dir[1]], mm);
+}
+
+function extendForward(prev, corner, mm) {
+    return pointBeyond(corner.anchor, arrivalDir(prev, corner), mm);
+}
+
+function pointBeyond(anchor, dir, mm) {
+    var len = Math.sqrt(dir[0] * dir[0] + dir[1] * dir[1]);
+    var scale = len < 0.01 ? 0 : (mm * MM) / len;
+    var at = [anchor[0] + dir[0] * scale, anchor[1] + dir[1] * scale];
+    return { anchor: at, left: at, right: at, corner: true, role: "ext" };
+}
+
+function writeRun(path, pts) {
+    var i, p, vert, atEnd;
+    for (i = 0; i < pts.length; i++) {
+        vert = pts[i];
+        atEnd = i === 0 || i === pts.length - 1 || vert.role === "ext";
+        p = path.pathPoints.add();
+        p.anchor = vert.anchor;
+        if (atEnd) {
+            p.leftDirection = vert.anchor;
+            p.rightDirection = vert.anchor;
+            p.pointType = PointType.CORNER;
+        } else {
+            p.leftDirection = vert.left;
+            p.rightDirection = vert.right;
+            p.pointType = vert.corner ? PointType.CORNER : PointType.SMOOTH;
+        }
+    }
+}
+
+function copyAppearance(from, to) {
+    to.filled = false;
+    to.stroked = true;
+    to.strokeWidth = 0.6;
+    try {
+        if (from.stroked) {
+            to.strokeColor = from.strokeColor;
+            to.strokeWidth = from.strokeWidth;
+        } else if (from.filled) {
+            to.strokeColor = from.fillColor;
+        }
+    } catch (eAppear) {}
+}
 /*__WORKER_END__*/
 
 function workerSource() {

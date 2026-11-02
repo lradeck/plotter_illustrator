@@ -1,3 +1,4 @@
+#include "pathcorners.jsx"
 var MM = 72 / 25.4;
 var PANEL_LOG = "C:/Users/Leon/Downloads/doublecut/panel.log";
 
@@ -833,4 +834,161 @@ function toJson(value) {
 
 function quote(text) {
     return "\"" + String(text).replace(/\\/g, "\\\\").replace(/\"/g, "\\\"") + "\"";
+}
+
+function addCutOver(mm) {
+    return editSelection(Number(mm), false);
+}
+
+function splitInward() {
+    return editSelection(0, true);
+}
+
+function loadCorners() {
+    if (typeof planCut === "function") return;
+    var candidates = [];
+    var name = "";
+    try { name = String($.fileName); } catch (eName) { name = ""; }
+    if (name) candidates.push(name.replace(/[^\/\\]+$/, "") + "pathcorners.jsx");
+    try {
+        candidates.push(Folder.userData.fsName + "/Adobe/CEP/extensions/com.leon.plotter/jsx/pathcorners.jsx");
+    } catch (eFolder) {}
+    var i, file;
+    for (i = 0; i < candidates.length; i++) {
+        file = new File(candidates[i]);
+        if (!file.exists) continue;
+        $.evalFile(file);
+        if (typeof planCut === "function") {
+            $.global.planCut = planCut;
+            return;
+        }
+    }
+}
+
+function cornerPlan() {
+    if (typeof planCut === "function") return planCut;
+    if (typeof $.global.planCut === "function") return $.global.planCut;
+    return null;
+}
+
+function editSelection(cutoverMm, inward) {
+    try {
+        if (!app.documents.length) return "nodoc";
+        if (!(cutoverMm > 0) && !inward) return "none";
+        loadCorners();
+        var cut = cornerPlan();
+        if (typeof cut !== "function") return "ERR pathcorners";
+        var paths = selectedPaths();
+        if (!paths.length) return "nosel";
+        var specs = [];
+        var i;
+        for (i = 0; i < paths.length; i++) {
+            try {
+                if (!paths[i].pathPoints || paths[i].pathPoints.length < 2) {
+                    specs.push({ closed: false, verts: [] });
+                    continue;
+                }
+            } catch (eGone) {
+                specs.push({ closed: false, verts: [] });
+                continue;
+            }
+            specs.push({ closed: paths[i].closed === true, verts: readVerts(paths[i]) });
+        }
+        var plan = cut(specs, cutoverMm > 0 ? cutoverMm * MM : 0, inward);
+        var made = 0;
+        var created = [];
+        var s, src, neu;
+        for (s = 0; s < plan.strokes.length; s++) {
+            src = paths[plan.strokes[s].source];
+            neu = src.layer.pathItems.add();
+            neu.closed = false;
+            writeRun(neu, plan.strokes[s].verts);
+            copyAppearance(src, neu);
+            created.push(neu);
+            made++;
+        }
+        for (s = 0; s < plan.remove.length; s++) {
+            try { paths[plan.remove[s]].remove(); } catch (eRem) {}
+        }
+        if (created.length) {
+            try { app.activeDocument.selection = created; } catch (eSel) {}
+        }
+        logLine((inward ? "split-inward" : "cutover " + cutoverMm) + " paths " + paths.length + " made " + made);
+        app.redraw();
+        return made ? "ok " + made : "none";
+    } catch (eEdit) {
+        logLine("edit ERR " + clean(eEdit.message));
+        return "ERR " + clean(eEdit.message);
+    }
+}
+
+function selectedPaths() {
+    var found = [];
+    var sel = app.activeDocument.selection;
+    var i;
+    if (!sel) return found;
+    for (i = 0; i < sel.length; i++) collectPathItems(sel[i], found);
+    return found;
+}
+
+function collectPathItems(item, found) {
+    var i;
+    if (!item) return;
+    if (item.typename === "PathItem") {
+        if (!item.guides && !item.clipping) found.push(item);
+    } else if (item.typename === "CompoundPathItem") {
+        for (i = 0; i < item.pathItems.length; i++) collectPathItems(item.pathItems[i], found);
+    } else if (item.typename === "GroupItem") {
+        for (i = 0; i < item.pageItems.length; i++) collectPathItems(item.pageItems[i], found);
+    }
+}
+
+function readVerts(item) {
+    var pts = item.pathPoints;
+    var verts = [];
+    var i, p;
+    for (i = 0; i < pts.length; i++) {
+        p = pts[i];
+        verts.push({
+            anchor: [p.anchor[0], p.anchor[1]],
+            left: [p.leftDirection[0], p.leftDirection[1]],
+            right: [p.rightDirection[0], p.rightDirection[1]],
+            corner: p.pointType === PointType.CORNER,
+            role: "flat"
+        });
+    }
+    return verts;
+}
+
+function writeRun(path, pts) {
+    var i, p, vert, atEnd;
+    for (i = 0; i < pts.length; i++) {
+        vert = pts[i];
+        atEnd = i === 0 || i === pts.length - 1 || vert.role === "ext";
+        p = path.pathPoints.add();
+        p.anchor = vert.anchor;
+        if (atEnd) {
+            p.leftDirection = vert.anchor;
+            p.rightDirection = vert.anchor;
+            p.pointType = PointType.CORNER;
+        } else {
+            p.leftDirection = vert.left;
+            p.rightDirection = vert.right;
+            p.pointType = vert.corner ? PointType.CORNER : PointType.SMOOTH;
+        }
+    }
+}
+
+function copyAppearance(from, to) {
+    to.filled = false;
+    to.stroked = true;
+    to.strokeWidth = 0.6;
+    try {
+        if (from.stroked) {
+            to.strokeColor = from.strokeColor;
+            to.strokeWidth = from.strokeWidth;
+        } else if (from.filled) {
+            to.strokeColor = from.fillColor;
+        }
+    } catch (eAppear) {}
 }
