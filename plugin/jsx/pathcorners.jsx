@@ -81,9 +81,15 @@ function cutVerts(verts, closed, extendPt, inward) {
     var runs = closed ? closedRuns(verts, breaks) : openRuns(verts, breaks);
     var out = [];
     var built;
+    var halves;
+    var h;
     for (i = 0; i < runs.length; i++) {
         built = finishRun(runs[i], extendPt, inward);
-        if (built && built.length >= 2) out.push(built);
+        if (!built || built.length < 2) continue;
+        if (inward && built[0].role === "concave" && built[built.length - 1].role === "concave") {
+            halves = halvesFromTips(built);
+            for (h = 0; h < halves.length; h++) out.push(halves[h]);
+        } else out.push(built);
     }
     return out;
 }
@@ -169,13 +175,95 @@ function openRuns(verts, breaks) {
 }
 
 function finishRun(pts, extendPt, inward) {
+    var corner;
     if (!pts || pts.length < 2) return null;
     if (inward && pts[pts.length - 1].role === "concave" && pts[0].role !== "concave") reverseRun(pts);
     if (extendPt > 0) {
-        if (pts[0].role === "convex") pts.unshift(extendBack(pts[0], pts[1], extendPt));
-        if (pts[pts.length - 1].role === "convex") pts.push(extendForward(pts[pts.length - 2], pts[pts.length - 1], extendPt));
+        if (pts[0].role === "convex") {
+            pts.unshift(extendBack(pts[0], pts[1], extendPt));
+            corner = pts[1];
+            corner.left = [corner.anchor[0], corner.anchor[1]];
+            corner.corner = true;
+        }
+        if (pts[pts.length - 1].role === "convex") {
+            pts.push(extendForward(pts[pts.length - 2], pts[pts.length - 1], extendPt));
+            corner = pts[pts.length - 2];
+            corner.right = [corner.anchor[0], corner.anchor[1]];
+            corner.corner = true;
+        }
     }
     return pts;
+}
+
+function halvesFromTips(pts) {
+    var total = 0;
+    var i;
+    var parts;
+    for (i = 0; i < pts.length - 1; i++) total += segmentLen(pts[i], pts[i + 1]);
+    parts = splitRun(pts, total * 0.5);
+    if (!parts) return [pts];
+    reverseRun(parts[1]);
+    return parts;
+}
+
+function segmentLen(a, b) {
+    var dx = b.anchor[0] - a.anchor[0];
+    var dy = b.anchor[1] - a.anchor[1];
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+function splitRun(pts, dist) {
+    var i, seg, acc, t, part, first, second, k;
+    acc = 0;
+    for (i = 0; i < pts.length - 1; i++) {
+        seg = segmentLen(pts[i], pts[i + 1]);
+        if (seg < 0.01) continue;
+        if (acc + seg < dist && i < pts.length - 2) {
+            acc += seg;
+            continue;
+        }
+        t = (dist - acc) / seg;
+        if (t < 0.05) t = 0.05;
+        if (t > 0.95) t = 0.95;
+        part = splitSegment(pts[i], pts[i + 1], t);
+        first = [];
+        second = [];
+        for (k = 0; k < i; k++) first.push(cloneVert(pts[k]));
+        first.push(part.a);
+        first.push(part.end);
+        second.push(part.start);
+        second.push(part.b);
+        for (k = i + 2; k < pts.length; k++) second.push(cloneVert(pts[k]));
+        return [first, second];
+    }
+    return null;
+}
+
+function splitSegment(a, b, t) {
+    var p0 = a.anchor;
+    var p1 = a.right;
+    var p2 = b.left;
+    var p3 = b.anchor;
+    var q0 = lerp(p0, p1, t);
+    var q1 = lerp(p1, p2, t);
+    var q2 = lerp(p2, p3, t);
+    var r0 = lerp(q0, q1, t);
+    var r1 = lerp(q1, q2, t);
+    var s = lerp(r0, r1, t);
+    var left = cloneVert(a);
+    var right = cloneVert(b);
+    left.right = q0;
+    right.left = q2;
+    return {
+        a: left,
+        b: right,
+        end: { anchor: s, left: r0, right: [s[0], s[1]], corner: true, role: "flat", joint: false },
+        start: { anchor: s, left: [s[0], s[1]], right: r1, corner: true, role: "flat", joint: false }
+    };
+}
+
+function lerp(a, b, t) {
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 }
 
 function reverseRun(pts) {

@@ -119,6 +119,61 @@ var starts = dartIn.strokes.filter(function (stroke) {
     return dist(stroke.verts[0].anchor, [40, 30]) < 0.05;
 });
 assert.strictEqual(starts.length, 2, "both cuts leave the inward tip");
+var deep = ring([[0, 0], [200, 0], [200, 40], [130, 40], [100, -120], [70, 40], [0, 40]]);
+var deepIn = ctx.planCut([deep], 0, true);
+var fromTip = deepIn.strokes.filter(function (stroke) {
+    return dist(stroke.verts[0].anchor, [100, -120]) < 0.05;
+});
+assert.strictEqual(fromTip.length, 2, "both cuts leave the deep inward tip");
+
+var curved = ring([
+    [0, 0],
+    [80, 0],
+    [80, 60],
+    [0, 60]
+]);
+curved.verts[1].right = [110, 40];
+var curvedCut = ctx.planCut([curved], 10, false);
+var tangent = null;
+curvedCut.strokes.forEach(function (stroke) {
+    var last = stroke.verts[stroke.verts.length - 1];
+    var prev = stroke.verts[stroke.verts.length - 2];
+    if (last.role !== "ext") return;
+    if (dist(prev.anchor, [80, 0]) > 0.05) return;
+    tangent = { prev: prev, ext: last.anchor };
+});
+assert.ok(tangent, "cut over continues the edge into the corner");
+assert.ok(dist(tangent.prev.right, tangent.prev.anchor) < 0.05, "extension is a straight tangent");
+assert.ok(Math.abs(tangent.ext[1] - tangent.prev.anchor[1]) < 0.05, "extension stays on the incoming tangent");
+var lead = null;
+curvedCut.strokes.forEach(function (stroke) {
+    if (stroke.verts[0].role !== "ext") return;
+    if (dist(stroke.verts[1].anchor, [80, 0]) > 0.05) return;
+    lead = stroke.verts;
+});
+assert.ok(lead, "the leaving edge also gets a straight lead");
+assert.ok(dist(lead[1].left, lead[1].anchor) < 0.05, "lead does not reuse the other tangent");
+assert.ok(dist(lead[1].right, [110, 40]) < 0.05, "the original outgoing tangent stays");
+assert.ok(Math.abs((lead[0].anchor[1] - 0) / (lead[0].anchor[0] - 80) - (40 / 30)) < 0.02, "lead lies on the outgoing tangent");
+
+var valley = {
+    closed: false,
+    verts: [V(0, 0), V(30, 40), V(70, 10), V(110, 40)]
+};
+var valleyIn = ctx.planCut([valley], 0, true);
+function endsAt(strokes, point) {
+    return strokes.filter(function (stroke) {
+        return dist(stroke.verts[stroke.verts.length - 1].anchor, point) < 0.05;
+    }).length;
+}
+assert.strictEqual(valleyIn.strokes.filter(function (stroke) {
+    return dist(stroke.verts[0].anchor, [30, 40]) < 0.05;
+}).length, 2, "both flanks leave the first inward tip");
+assert.strictEqual(valleyIn.strokes.filter(function (stroke) {
+    return dist(stroke.verts[0].anchor, [70, 10]) < 0.05;
+}).length, 2, "both flanks leave the second inward tip");
+assert.strictEqual(endsAt(valleyIn.strokes, [30, 40]), 0, "no cut arrives at the first tip");
+assert.strictEqual(endsAt(valleyIn.strokes, [70, 10]), 0, "no cut arrives at the second tip");
 
 var looseIn = ctx.planCut(linesOf(dart), 0, true);
 assert.strictEqual(looseIn.strokes.length, 4, "split inward on separate lines");
