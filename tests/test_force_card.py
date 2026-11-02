@@ -29,10 +29,11 @@ class PassesTest(unittest.TestCase):
         once = _downs(_square(passes=1))
         twice = _downs(_square(passes=2))
         thrice = _downs(_square(passes=3))
-        self.assertEqual(len(twice), len(once) * 2)
-        self.assertEqual(len(thrice), len(once) * 3)
-        self.assertEqual(_laps(_square(passes=2)), 2)
-        self.assertEqual(_laps(_square(passes=3)), 3)
+        self.assertEqual(len(twice), 1 + (len(once) - 1) * 2)
+        self.assertEqual(len(thrice), 1 + (len(once) - 1) * 3)
+        self.assertEqual(twice[len(once):], once[1:])
+        self.assertEqual(_laps(_square(passes=2)), 1)
+        self.assertEqual(_laps(_square(passes=3)), 1)
 
     def test_open_passes_lift_instead_of_reversing(self):
         text = encode_job([
@@ -196,9 +197,10 @@ class ForceCardTest(unittest.TestCase):
             self.assertTrue(path["closed"])
             self.assertEqual(round(path["points_mm"][1][0] - path["points_mm"][0][0], 3), SQUARE_MM)
             self.assertEqual(round(path["points_mm"][2][1] - path["points_mm"][0][1], 3), SQUARE_MM)
+            self.assertEqual(path["blade_offset_mm"], 0.35)
             self.assertEqual(
                 path["layer"],
-                "Left F%d S%d T%d x%d" % (
+                "Left F%d S%d T%d x%d O0.35" % (
                     path["force"], path["cut_speed"], path["travel_speed"], path["passes"]
                 ),
             )
@@ -231,7 +233,8 @@ class ForceCardTest(unittest.TestCase):
             self.assertEqual(path["holder"], "right")
             self.assertEqual(path["mode"], "pen")
             self.assertEqual(path["rgb"], PEN_RGB)
-            self.assertEqual(path["layer"], "Right Stift F20 S20 T20 x1")
+            self.assertEqual(path["layer"], "Right Stift F20 S20 T20 x1 O0.0")
+            self.assertEqual(path["blade_offset_mm"], 0.0)
             self.assertEqual(path["cut_speed"], 20)
             self.assertFalse(path["closed"])
         for passes in PASSES:
@@ -275,7 +278,8 @@ class ForceCardTest(unittest.TestCase):
         for path in pens:
             self.assertEqual(path["cut_speed"], 20)
             self.assertEqual(path["travel_speed"], 400)
-            self.assertEqual(path["layer"], "Right Stift F20 S20 T400 x1")
+            self.assertEqual(path["layer"], "Right Stift F20 S20 T400 x1 O0.0")
+            self.assertEqual(path["blade_offset_mm"], 0.0)
         cuts = [path for path in job["paths"] if path["mode"] == "cut"]
         self.assertTrue(all(path["travel_speed"] == 400 for path in cuts))
 
@@ -289,6 +293,16 @@ class ForceCardTest(unittest.TestCase):
         self.assertTrue(all(path["layer"].startswith("Left Stift ") for path in pens))
         self.assertTrue(all(path["holder"] == "right" for path in cuts))
         self.assertTrue(all(path["layer"].startswith("Right F") for path in cuts))
+
+    def test_cut_offset_stays_off_the_pen(self):
+        job = build_force_card(offset=0.4)
+        pens = [path for path in job["paths"] if path["mode"] == "pen"]
+        cuts = [path for path in job["paths"] if path["mode"] == "cut"]
+        self.assertTrue(all(path["blade_offset_mm"] == 0.0 for path in pens))
+        self.assertTrue(all(path["layer"].endswith(" O0.0") for path in pens))
+        self.assertTrue(all(path["blade_offset_mm"] == 0.4 for path in cuts))
+        self.assertTrue(all(path["layer"].endswith(" O0.4") for path in cuts))
+        self.assertEqual(job["blade_offset_mm"], 0.4)
 
     def test_everything_lands_on_the_mat(self):
         page = self.job["page_mm"]
@@ -512,6 +526,8 @@ class ForceCardTest(unittest.TestCase):
         self.assertIn('id="config-export"', html)
         self.assertIn('id="config-import"', html)
         self.assertIn('id="pen-holder"', html)
+        self.assertIn('id="square-offset" value="0.35"', html)
+        self.assertIn('id="square-angle"', html)
         self.assertIn('id="pen-speed" value="20"', html)
         self.assertIn("Travel speed", html)
         self.assertIn("Pen force", html)

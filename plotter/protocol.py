@@ -18,6 +18,9 @@ that holder without the drag-knife corner swing.
 import math
 
 UNITS_PER_MM = 40
+# The captured orient cut starts 21 mm along the first side. A tick on the
+# corner is the mark CameraCut does not leave.
+ORIENT_MM = 21
 
 HOLDERS = {
     "left": "P0;",
@@ -100,16 +103,63 @@ def _moves(points, radius, overcut, turn, closed=True, passes=1, alternate=False
             for point in stroke:
                 commands.append("D%d,%d" % point)
         return " ".join(commands) + " "
-    # Each lap is its own pen-down and starts one corner further on, so the
-    # cutter cannot drop the repeat and the same side is not the entry twice.
-    # The swing that aligns the blade is cut before the first side. Without
-    # it that side is scored while the knife is still turning.
+    if alternate:
+        return _alternate_closed(points, radius, overcut, turn, passes)
+    return _camera_closed(points, radius, overcut, turn, passes)
+
+
+def _camera_closed(points, radius, overcut, turn, passes):
+    """One tick, then every lap in a single pen-down.
+
+    CameraCut keeps the knife down through the corner arcs. It plunges one
+    blade-offset past the point where the closing arc meets the first side,
+    runs the outline once per pass, and stops one further offset past that
+    plunge. The captured square used 14, 28 and 42 units for a 0.35 mm offset.
+    """
+    outline = _outline(points, radius)
+    if outline[0] != outline[-1]:
+        outline.append(outline[0])
+    junction = outline[0]
+    far = outline[1]
+    length = math.hypot(far[0] - junction[0], far[1] - junction[1])
+    tail = 2 * radius + overcut
+    if radius > 0 and length > tail:
+        plunge = _extend(junction, far, radius)
+        seam = _extend(junction, far, 2 * radius)
+    else:
+        plunge = junction
+        seam = junction
+    finish = _extend(seam, far, overcut) if overcut > 0 else seam
+    commands = []
+    if turn > 0:
+        commands.extend(_orient_cut(junction, far, radius, turn))
+    path = [plunge]
+    ring = outline[:-1]
+    for _lap in range(passes):
+        path.extend(ring[1:])
+        path.append(ring[0])
+    if seam != path[-1]:
+        path.append(seam)
+    if finish != path[-1]:
+        path.append(finish)
+    commands.append("U%d,%d" % path[0])
+    previous = None
+    for point in path:
+        if point == previous:
+            continue
+        commands.append("D%d,%d" % point)
+        previous = point
+    return " ".join(commands) + " "
+
+
+def _alternate_closed(points, radius, overcut, turn, passes):
+    """Lift between laps and start the next one at the following corner."""
     commands = []
     count = len(points)
     for lap in range(passes):
         shift = lap % count
         ring = points[shift:] + points[:shift]
-        if alternate and lap % 2 == 1:
+        if lap % 2 == 1:
             ring = list(reversed(ring))
         outline = _outline(ring, radius)
         lead = _lead_in(ring, radius)
@@ -182,6 +232,26 @@ def _corner_arc(prev, corner, nxt, radius):
             int(round(corner[1] + radius * math.sin(angle))),
         ))
     return points
+
+
+def _orient_cut(junction, far, radius, length):
+    """1 mm tick beside the first side, inset from the corner."""
+    direction = _unit(far[0] - junction[0], far[1] - junction[1])
+    if direction is None:
+        return []
+    corner = (
+        junction[0] - direction[0] * radius,
+        junction[1] - direction[1] * radius,
+    )
+    span = math.hypot(far[0] - corner[0], far[1] - corner[1]) - radius
+    start = units(ORIENT_MM)
+    if span <= length or start + length > span - max(radius, 0):
+        start = max(0, (span - length) / 2.0)
+    origin = (
+        int(round(corner[0] + direction[0] * start)),
+        int(round(corner[1] + direction[1] * start)),
+    )
+    return _turn_knife(origin, far, length)
 
 
 def _turn_knife(start, nxt, length):

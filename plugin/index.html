@@ -124,6 +124,14 @@
                     <option value="right" selected>Right</option>
                     <option value="left">Left</option>
                 </select>
+                <label for="square-offset">Offset</label>
+                <select id="square-angle" class="angle" title="30 Grad setzt 0.25 mm, 45 Grad 0.30 mm, 60 Grad 0.40 mm. Das Feld bleibt editierbar. Der Stift bleibt bei 0.">
+                    <option value="">°</option>
+                    <option value="30">30°</option>
+                    <option value="45">45°</option>
+                    <option value="60">60°</option>
+                </select>
+                <input id="square-offset" value="0.35" title="Messerversatz der Quadrate in Millimetern. Der Stift bleibt bei 0.">
                 <label for="overcut" title="0 zeichnet ein geschlossenes Quadrat. Ein Wert darueber zeichnet vier Linien, die um diese Millimeter an den Ecken ueberstehen.">Overcut</label><input id="overcut" value="0" title="0 zeichnet ein geschlossenes Quadrat. Ein Wert darueber zeichnet vier Linien, die um diese Millimeter an den Ecken ueberstehen.">
                 <label for="steg" title="0 schneidet die Seite durch. Ein Wert laesst in der Mitte jeder Seite eine Luecke dieser Breite.">Steg</label><input id="steg" value="0.5" title="0 schneidet die Seite durch. Ein Wert laesst in der Mitte jeder Seite eine Luecke dieser Breite.">
             </div>
@@ -160,7 +168,7 @@
                 Nur markierte Ebenen
             </label>
             <label class="check" for="alternate" title="Jeder weitere Durchgang startet am anderen Ende. Dazwischen wird das Messer angehoben.">
-                <input id="alternate" type="checkbox" checked>
+                <input id="alternate" type="checkbox">
                 Mehrfach abwechselnd
             </label>
             <button id="connection-save" type="button">Speichern</button>

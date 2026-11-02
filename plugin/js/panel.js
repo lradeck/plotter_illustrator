@@ -11,7 +11,7 @@ var SQUARE_FIELDS = [
     "force-min", "force-max", "force-step",
     "speed-min", "speed-max", "speed-step",
     "pass-min", "pass-max", "pass-step",
-    "y-axis", "travel", "pen", "pen-speed", "overcut", "steg"
+    "y-axis", "travel", "pen", "pen-speed", "square-offset", "overcut", "steg"
 ];
 var EDITOR_PAIRS = [
     ["cfg-force", "force"],
@@ -232,6 +232,7 @@ function applySquareConfig(values) {
         id = SQUARE_FIELDS[i];
         if (values[id] != null) document.getElementById(id).value = values[id];
     }
+    syncAngleFrom("square-offset", "square-angle");
 }
 
 function fillConfigSelect(list, selectedName) {
@@ -677,6 +678,7 @@ function cardArgs() {
         .concat(passes)
         .concat([
             "--travel", String(numberValue("travel", 20)),
+            "--offset", offsetText("square-offset"),
             "--overcut", String(numberValue("overcut", 0)),
             "--steg", String(numberValue("steg", 0.5)),
             "--y-axis", yAxis,
@@ -849,6 +851,8 @@ document.getElementById("angle").addEventListener("change", function () { applyA
 document.getElementById("cfg-angle").addEventListener("change", function () { applyAngle("cfg-angle", "cfg-offset"); });
 document.getElementById("offset").addEventListener("change", function () { syncAngleFrom("offset", "angle"); });
 document.getElementById("cfg-offset").addEventListener("change", function () { syncAngleFrom("cfg-offset", "cfg-angle"); });
+document.getElementById("square-angle").addEventListener("change", function () { applyAngle("square-angle", "square-offset"); });
+document.getElementById("square-offset").addEventListener("change", function () { syncAngleFrom("square-offset", "square-angle"); });
 document.getElementById("color-load").addEventListener("click", loadColorConfig);
 document.getElementById("plot").addEventListener("click", plot);
 document.getElementById("apply").addEventListener("click", function () {

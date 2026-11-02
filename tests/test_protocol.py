@@ -80,6 +80,30 @@ class EncoderTest(unittest.TestCase):
         self.assertIn("D%d,0" % (units(10) + units(0.25)), text)
         self.assertNotIn("D%d,0" % (units(10) + units(0.35)), text)
 
+    def test_orient_cut_stays_off_the_corners(self):
+        text = encode_job([{
+            "holder": "left",
+            "mode": "cut",
+            "force": 20,
+            "cut_speed": 10,
+            "travel_speed": 30,
+            "closed": True,
+            "points_mm": [[0, 0], [0, 122], [113.2, 122], [113.2, 0]],
+        }], (420, 297), accurate=True, blade_offset_mm=0.35, turn_knife_mm=1)
+        downs = [move for move in parse_job(text)["moves"] if move[0] == "D"]
+        tick = downs[:2]
+        span = abs(tick[1][1] - tick[0][1]) + abs(tick[1][2] - tick[0][2])
+        self.assertEqual(span, units(1))
+        corners = [
+            (0, 0),
+            (0, units(122)),
+            (units(113.2), units(122)),
+            (units(113.2), 0),
+        ]
+        for move in tick:
+            nearest = min(abs(move[1] - x) + abs(move[2] - y) for x, y in corners)
+            self.assertGreater(nearest, units(15))
+
     def test_turn_knife_is_one_millimetre(self):
         text = _knife_square(turn_knife_mm=1, overcut_mm=0)
         job = parse_job(text)
@@ -96,15 +120,27 @@ class EncoderTest(unittest.TestCase):
         span = abs(end[1] - prev[1]) + abs(end[2] - prev[2])
         self.assertEqual(span, units(3))
 
-    def test_two_passes_enter_on_different_sides(self):
+    def test_two_passes_stay_down_through_the_corners(self):
         path = _path("left", "cut", 20, 10, 30, [[0, 0], [10, 0], [10, 10], [0, 10]])
         path["passes"] = 2
         text = encode_job(
             [path], (297, 420), accurate=True, blade_offset_mm=0.35, turn_knife_mm=0
         )
-        longs = _long_cuts(parse_job(text)["moves"])
+        moves = parse_job(text)["moves"]
+        body = text.split("US30;", 1)[1].replace(";", " ")
+        ups = [token for token in body.split() if token.startswith("U")]
+        self.assertEqual(ups, ["U0,%d" % (units(10) - 2 * units(0.35)), "U0,0"])
+        longs = _long_cuts(moves)
         self.assertEqual(len(longs), 8)
-        self.assertNotEqual(_side_key(longs[0]), _side_key(longs[4]))
+        self.assertEqual(_side_key(longs[0]), _side_key(longs[4]))
+
+    def test_closed_cut_overlaps_the_start_like_cameracut(self):
+        text = _knife_square(turn_knife_mm=0, overcut_mm=0)
+        downs = [move for move in parse_job(text)["moves"] if move[0] == "D"]
+        radius = units(0.35)
+        top = units(10)
+        self.assertEqual(downs[0], ("D", 0, top - 2 * radius))
+        self.assertEqual(downs[-1], ("D", 0, top - 3 * radius))
 
 
 class PatternTest(unittest.TestCase):

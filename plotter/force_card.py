@@ -346,7 +346,7 @@ def build_force_card(pen_force=20, force_min=FORCE_MIN, force_max=FORCE_MAX,
                      force_step=1, speed_min=10, speed_max=50, speed_step=10,
                      pass_min=1, pass_max=3, pass_step=1, travel=TRAVEL,
                      overcut=0, y_axis="force", steg=0, pen_speed=20,
-                     pen_holder="right"):
+                     pen_holder="right", offset=0.35):
     forces = series(force_min, force_max, force_step)
     speeds = series(speed_min, speed_max, speed_step)
     pass_values = series(pass_min, pass_max, pass_step)
@@ -354,6 +354,7 @@ def build_force_card(pen_force=20, force_min=FORCE_MIN, force_max=FORCE_MAX,
         y_axis = "force"
     pen_holder = "left" if pen_holder == "left" else "right"
     cut_holder = "left" if pen_holder == "right" else "right"
+    cut_offset = float(offset)
     y_values = forces if y_axis == "force" else speeds
     x_values = speeds if y_axis == "force" else forces
     overlap = max(float(overcut), 0.0)
@@ -413,6 +414,7 @@ def build_force_card(pen_force=20, force_min=FORCE_MIN, force_max=FORCE_MAX,
                     overlap,
                     steg,
                     cut_holder,
+                    cut_offset,
                 ))
                 if row == 0:
                     col_text = str(x_value)
@@ -444,7 +446,7 @@ def build_force_card(pen_force=20, force_min=FORCE_MIN, force_max=FORCE_MAX,
         "page_mm": [page_w, page_h],
         "origin_mm": [0, 0],
         "accurate": True,
-        "blade_offset_mm": 0.35,
+        "blade_offset_mm": cut_offset,
         "overcut_mm": 0.0,
         "turn_knife_mm": 1.0,
         "paths": _sheet_paths(pens, cuts),
@@ -504,12 +506,20 @@ def _pen(points, force, speed, travel, label, holder="right"):
         "passes": 1,
         "rgb": list(PEN_RGB),
         "label": label,
-        "layer": "%s Stift F%d S%d T%d x1" % (side, int(force), int(speed), int(travel)),
+        "layer": "%s Stift F%d S%d T%d x1 O0.0" % (side, int(force), int(speed), int(travel)),
+        "blade_offset_mm": 0.0,
         "points_mm": [[round(x, 3), round(y, 3)] for x, y in points],
     }
 
 
-def _cut(x, y, force, speed, passes, travel, rgb, overcut=0, steg=0, holder="left"):
+def _offset_label(mm):
+    text = str(round(float(mm), 3))
+    if "." not in text:
+        text += ".0"
+    return text
+
+
+def _cut(x, y, force, speed, passes, travel, rgb, overcut=0, steg=0, holder="left", offset=0.35):
     holder = "right" if holder == "right" else "left"
     side = "Right" if holder == "right" else "Left"
     common = {
@@ -521,7 +531,10 @@ def _cut(x, y, force, speed, passes, travel, rgb, overcut=0, steg=0, holder="lef
         "passes": int(passes),
         "rgb": rgb,
         "label": "F%d S%d x%d" % (force, speed, passes),
-        "layer": "%s F%d S%d T%d x%d" % (side, int(force), int(speed), int(travel), int(passes)),
+        "layer": "%s F%d S%d T%d x%d O%s" % (
+            side, int(force), int(speed), int(travel), int(passes), _offset_label(offset)
+        ),
+        "blade_offset_mm": float(offset),
     }
     side = SQUARE_MM
     span = max(float(overcut), 0.0)

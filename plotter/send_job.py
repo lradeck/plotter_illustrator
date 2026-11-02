@@ -316,6 +316,8 @@ def main(argv=None):
     parser.add_argument("--pass-max", type=int, default=3)
     parser.add_argument("--pass-step", type=int, default=1)
     parser.add_argument("--travel", type=int, default=20)
+    parser.add_argument("--offset", type=float, default=0.35,
+                        help="blade offset for the cut squares, in mm; the pen stays at 0")
     parser.add_argument("--overcut", type=float, default=0,
                         help="extend each square side past the corners, in mm")
     parser.add_argument("--steg", type=float, default=0.5,
@@ -340,6 +342,7 @@ def main(argv=None):
             pass_min=args.pass_min, pass_max=args.pass_max, pass_step=args.pass_step,
             travel=args.travel, overcut=args.overcut, y_axis=args.y_axis,
             steg=args.steg, pen_speed=args.pen_speed, pen_holder=args.pen_holder,
+            offset=args.offset,
         )
         if args.alternate:
             document["alternate"] = True
