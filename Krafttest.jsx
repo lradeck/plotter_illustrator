@@ -15,6 +15,36 @@ var PLOTTER_PY = "C:/Users/Leon/Downloads/doublecut/plotter/send_job.py";
 var COLOR_SETTINGS = "C:/Users/Leon/Downloads/doublecut/colors.json";
 /*__WORKER_START__*/
 var MM = 72 / 25.4;
+var PANEL_LOG = "C:/Users/Leon/Downloads/doublecut/panel.log";
+
+function logLine(message) {
+    try {
+        var file = new File(PANEL_LOG);
+        file.encoding = "UTF-8";
+        var stamp = new Date();
+        var line = stamp.getFullYear() + "-" + two(stamp.getMonth() + 1) + "-" + two(stamp.getDate())
+            + " " + two(stamp.getHours()) + ":" + two(stamp.getMinutes()) + ":" + two(stamp.getSeconds())
+            + " host " + message;
+        if (file.exists && file.length > 180000) {
+            if (!file.open("r")) return;
+            var text = file.read();
+            file.close();
+            text = text.substring(text.length - 120000);
+            var cut = text.indexOf("\n");
+            if (cut >= 0) text = text.substring(cut + 1);
+            if (!file.open("w")) return;
+            file.write(text);
+            file.close();
+        }
+        if (!file.open("a")) return;
+        file.writeln(line);
+        file.close();
+    } catch (eLog) {}
+}
+
+function two(n) {
+    return (n < 10 ? "0" : "") + n;
+}
 
 function drawCard(jsonPath) {
     try {
@@ -41,64 +71,85 @@ function drawCard(jsonPath) {
 function scanColors(outPath) {
     try {
         if (!app.documents.length) return "nodoc";
-        sweepContainer(app.activeDocument, true);
         var found = harvest(app.activeDocument);
         var seen = {};
         var list = [];
-        var i, item, key;
+        var i, item, key, named, entry;
         for (i = 0; i < found.paths.length; i++) {
             item = found.paths[i];
-            if (isComplete(readLayerSettings(item.layers))) continue;
             key = rgbKey(item.rgb);
-            if (seen[key]) continue;
-            seen[key] = true;
-            list.push(item.rgb);
+            named = readLayerSettings(item.layers);
+            entry = seen[key];
+            if (!entry) {
+                entry = {
+                    rgb: item.rgb,
+                    layer: item.layers && item.layers.length ? String(item.layers[0]) : ""
+                };
+                if (isComplete(named)) copyNamed(entry, named);
+                seen[key] = entry;
+                list.push(entry);
+            } else if (!entry.complete && isComplete(named)) {
+                copyNamed(entry, named);
+                entry.layer = item.layers && item.layers.length ? String(item.layers[0]) : entry.layer;
+            }
         }
+        logLine("scan colors=" + list.length);
         if (!writeText(outPath, toJson(list))) return "ERR Farben konnten nicht gespeichert werden";
         return "ok " + list.length;
     } catch (eScan) {
+        logLine("scan ERR " + clean(eScan.message));
         return "ERR " + clean(eScan.message);
     }
+}
+
+function copyNamed(entry, named) {
+    entry.complete = true;
+    entry.force = named.force;
+    entry.speed = named.speed;
+    entry.travel = named.travel;
+    entry.passes = named.passes;
+    entry.holder = named.holder;
+    entry.mode = named.mode || "cut";
+    if (typeof named.offset === "number") entry.offset = named.offset;
 }
 
 function collectJob(jobPath, blade, turn, selectedOnly, colorsPath) {
     try {
         if (!app.documents.length) return "nodoc";
         var onlyMarked = selectedOnly === true || selectedOnly === 1 || selectedOnly === "true";
-        var settings = settingsMap(colorsPath ? readJson(colorsPath) : null);
         var doc = app.activeDocument;
-        sweepContainer(doc, true);
         var board = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
         var found = harvest(doc);
         var paths = [];
         var skipped = found.skipped;
-        var i, item, named, set;
+        var i, item, named, anyPicked, useItem, mode, holder;
+        anyPicked = false;
+        for (i = 0; i < found.paths.length; i++) {
+            if (found.paths[i].picked) anyPicked = true;
+        }
         for (i = 0; i < found.paths.length; i++) {
             item = found.paths[i];
-            if (onlyMarked && !item.marked) {
-                skipped++;
-                continue;
+            if (onlyMarked) {
+                useItem = anyPicked ? item.picked : item.marked;
+                if (!useItem) {
+                    skipped++;
+                    continue;
+                }
             }
             named = readLayerSettings(item.layers);
-            if (isComplete(named)) {
-                paths.push(jobPathFrom(item, named.holder, named.mode || "cut", named.force, named.speed, named.travel, named.passes));
-                continue;
-            }
-            set = settings[rgbKey(item.rgb)];
-            if (!set) {
+            if (!isComplete(named)) {
                 skipped++;
+                if (skipped <= 8) logLine("skip incomplete layer '" + (item.layers && item.layers.length ? item.layers.join(" / ") : "") + "'");
                 continue;
             }
-            paths.push(jobPathFrom(
-                item,
-                set.holder === "right" ? "right" : "left",
-                set.mode === "pen" || set.mode === "fold" ? set.mode : "cut",
-                whole(set.force, 20),
-                whole(set.speed, 20),
-                whole(set.travel, 20),
-                whole(set.passes, 1)
-            ));
+            mode = named.mode === "pen" || named.mode === "fold" ? named.mode : "cut";
+            holder = named.holder === "right" ? "right" : "left";
+            if (paths.length < 12) {
+                logLine("plot " + holder + " " + mode + " F" + named.force + " S" + named.speed + " T" + named.travel + " x" + named.passes + (typeof named.offset === "number" ? " O" + named.offset : "") + " '" + item.layers[0] + "'");
+            }
+            paths.push(jobPathFrom(item, holder, mode, named.force, named.speed, named.travel, named.passes, paths.length, named.offset));
         }
+        logLine("collect paths=" + paths.length + " skipped=" + skipped);
         var pageW = (board[2] - board[0]) / MM;
         var pageH = (board[1] - board[3]) / MM;
         var job = {
@@ -108,6 +159,7 @@ function collectJob(jobPath, blade, turn, selectedOnly, colorsPath) {
             blade_offset_mm: blade,
             overcut_mm: 0,
             turn_knife_mm: turn,
+            anchor: "top-left",
             paths: paths
         };
         if (!writeText(jobPath, toJson(job))) return "ERR Auftrag konnte nicht geschrieben werden";
@@ -127,9 +179,11 @@ function whole(value, fallback) {
     return n;
 }
 
-function jobPathFrom(item, holder, mode, force, speed, travel, passes) {
+function jobPathFrom(item, holder, mode, force, speed, travel, passes, order, offset) {
     if (passes < 1) passes = 1;
-    return {
+    var layerName = "";
+    if (item.layers && item.layers.length) layerName = String(item.layers[0]);
+    var path = {
         holder: holder || "left",
         mode: mode || "cut",
         force: force,
@@ -137,8 +191,12 @@ function jobPathFrom(item, holder, mode, force, speed, travel, passes) {
         travel_speed: travel,
         closed: item.closed,
         passes: passes,
+        layer: layerName,
+        order: order,
         points_mm: item.points
     };
+    if (typeof offset === "number" && !isNaN(offset)) path.blade_offset_mm = offset;
+    return path;
 }
 
 function drawPath(layer, path, originX, originY) {
@@ -212,8 +270,20 @@ function addOne(item, color, acc, holder) {
         closed: item.closed === true,
         holder: holder || "",
         layers: layerNames(item),
-        marked: layerMarked(item.layer)
+        marked: layerMarked(item.layer),
+        picked: pathSelected(item)
     });
+}
+
+function pathSelected(item) {
+    var current = item;
+    while (current && current.typename !== "Layer") {
+        try {
+            if (current.selected === true) return true;
+        } catch (ePick) {}
+        current = current.parent;
+    }
+    return false;
 }
 
 function layerMarked(layer) {
@@ -252,8 +322,16 @@ function parseLayerName(name) {
         travel: firstNumber(name, /T\s*(\d+)/i),
         passes: firstNumber(name, /x\s*(\d+)/i),
         holder: holderFromName(name),
-        mode: mode
+        mode: mode,
+        offset: offsetFromName(name)
     };
+}
+
+function offsetFromName(name) {
+    var found = String(name).match(/(^|[^A-Za-z])O\s*(\d+([.,]\d+)?)/i);
+    if (!found) return null;
+    var n = parseFloat(String(found[2]).replace(",", "."));
+    return isNaN(n) ? null : n;
 }
 
 function firstNumber(name, expr) {
@@ -269,31 +347,36 @@ function readLayerSettings(names) {
     var passes = null;
     var holder = "";
     var mode = "";
+    var offset = null;
     var i, parsed;
     if (!names) {
-        return { force: force, speed: speed, travel: travel, passes: passes, holder: holder, mode: mode };
+        return { force: force, speed: speed, travel: travel, passes: passes, holder: holder, mode: mode, offset: offset };
     }
     for (i = 0; i < names.length; i++) {
         parsed = parseLayerName(names[i]);
+        if (isComplete(parsed)) return parsed;
         if (force === null && parsed.force !== null) force = parsed.force;
         if (speed === null && parsed.speed !== null) speed = parsed.speed;
         if (travel === null && parsed.travel !== null) travel = parsed.travel;
         if (passes === null && parsed.passes !== null) passes = parsed.passes;
         if (!holder && parsed.holder) holder = parsed.holder;
         if (!mode && parsed.mode) mode = parsed.mode;
+        if (offset === null && parsed.offset !== null) offset = parsed.offset;
     }
-    return { force: force, speed: speed, travel: travel, passes: passes, holder: holder, mode: mode };
+    return { force: force, speed: speed, travel: travel, passes: passes, holder: holder, mode: mode, offset: offset };
 }
 
 function layerForPath(doc, path) {
     var name = path.layer;
     if (!name) {
-        if (path.mode === "pen") name = "Right Stift F" + path.force + " S" + path.cut_speed + " T" + path.travel_speed + " x" + path.passes;
+        if (path.mode === "pen") name = (path.holder === "left" ? "Left " : "Right ") + "Stift F" + path.force + " S" + path.cut_speed + " T" + path.travel_speed + " x" + path.passes;
         else name = (path.holder === "right" ? "Right " : "Left ") + "F" + path.force + " S" + path.cut_speed + " T" + path.travel_speed + " x" + path.passes;
     }
-    var parent = doc;
-    if (path.mode !== "pen") parent = ensureLayer(doc, "Bereich " + path.passes);
-    return ensureLayer(parent, name);
+    if (path.mode === "pen") {
+        var penParent = ensureLayer(doc, name);
+        return ensureLayer(penParent, path.label || "Stift");
+    }
+    return ensureLayer(ensureLayer(doc, "Bereich " + path.passes), name);
 }
 
 function ensureLayer(container, name) {
@@ -328,7 +411,7 @@ function sweepContainer(container, onlyGenerated) {
         removeEmptyGroups(layer);
         if (!layerIsEmpty(layer)) continue;
         if (container.typename === "Document" && container.layers.length <= 1) continue;
-        if (onlyGenerated && !generatedLayerName(layer.name)) continue;
+        if (onlyGenerated && !generatedLayerName(layer.name) && !(container.typename === "Layer" && generatedLayerName(container.name))) continue;
         try {
             layer.remove();
             removed++;
@@ -359,6 +442,141 @@ function layerIsEmpty(layer) {
 
 function generatedLayerName(name) {
     return /^(Bereich\s+\d+|Left\b|Right\b)/i.test(String(name));
+}
+
+function applyColorName(r, g, b, layerName) {
+    try {
+        if (!app.documents.length) return "nodoc";
+        var doc = app.activeDocument;
+        var want = Math.round(r) + "," + Math.round(g) + "," + Math.round(b);
+        var items = [];
+        collectColored(doc, want, items);
+        logLine("apply want=" + want + " name='" + layerName + "' items=" + items.length);
+        if (!items.length) return "ok 0";
+        var seen = [];
+        var count = 0;
+        var i, item, layer, sub, before, after;
+        for (i = 0; i < items.length; i++) {
+            item = items[i];
+            layer = item.layer;
+            if (!layer) {
+                logLine("apply item without layer");
+                continue;
+            }
+            unlockLayer(layer);
+            if (layerIsOnlyColor(layer, want)) {
+                if (layerSeen(seen, layer)) continue;
+                seen.push(layer);
+                before = String(layer.name);
+                if (before !== layerName) layer.name = layerName;
+                after = String(layer.name);
+                logLine("rename '" + before + "' -> '" + after + "'");
+                if (after !== layerName) return "ERR Ebene blieb '" + clean(after) + "'";
+                count++;
+            } else {
+                sub = onlyColorChild(layer, layerName, want);
+                if (!sub) {
+                    sub = layer.layers.add();
+                    sub.name = layerName;
+                    logLine("sublayer '" + layerName + "' under '" + layer.name + "'");
+                }
+                unlockLayer(sub);
+                if (item.layer !== sub) {
+                    before = String(item.layer.name);
+                    item.move(sub, ElementPlacement.PLACEATEND);
+                    logLine("moved from '" + before + "' to '" + sub.name + "'");
+                }
+                if (String(sub.name) !== layerName) return "ERR Ebene blieb '" + clean(sub.name) + "'";
+                count++;
+            }
+        }
+        try { app.redraw(); } catch (eRedraw) { logLine("redraw " + eRedraw.message); }
+        return "ok " + count;
+    } catch (eName) {
+        logLine("apply ERR " + clean(eName.message));
+        return "ERR " + clean(eName.message);
+    }
+}
+
+function layerSeen(seen, layer) {
+    var i;
+    for (i = 0; i < seen.length; i++) {
+        if (seen[i] === layer) return true;
+    }
+    return false;
+}
+
+function unlockLayer(layer) {
+    var current = layer;
+    while (current && current.typename === "Layer") {
+        try { current.locked = false; } catch (eLock) {}
+        if (!current.parent || current.parent.typename !== "Layer") break;
+        current = current.parent;
+    }
+}
+
+function onlyColorChild(parent, name, want) {
+    var i, layer;
+    for (i = 0; i < parent.layers.length; i++) {
+        layer = parent.layers[i];
+        if (layer.name === name && layerIsOnlyColor(layer, want)) return layer;
+    }
+    return null;
+}
+
+function collectColored(container, want, items) {
+    var pageItems, i, it, rgb;
+    if (container.layers) {
+        for (i = 0; i < container.layers.length; i++) collectColored(container.layers[i], want, items);
+    }
+    pageItems = container.pageItems;
+    if (!pageItems) return;
+    for (i = 0; i < pageItems.length; i++) {
+        it = pageItems[i];
+        if (!it || it.hidden) continue;
+        if (it.typename === "GroupItem") collectColored(it, want, items);
+        else if (it.typename === "CompoundPathItem" || it.typename === "PathItem") {
+            rgb = itemRgb(it);
+            if (rgb && rgbKey(rgb) === want) items.push(it);
+        }
+    }
+}
+
+function layerIsOnlyColor(layer, want) {
+    var i;
+    for (i = 0; i < layer.layers.length; i++) {
+        if (!layerIsOnlyColor(layer.layers[i], want)) return false;
+    }
+    return pageItemsOnlyColor(layer, want);
+}
+
+function pageItemsOnlyColor(container, want) {
+    var pageItems = container.pageItems;
+    var i, it, rgb;
+    if (!pageItems) return true;
+    for (i = 0; i < pageItems.length; i++) {
+        it = pageItems[i];
+        if (!it || it.hidden) continue;
+        if (it.typename === "GroupItem") {
+            if (!pageItemsOnlyColor(it, want)) return false;
+        } else if (it.typename === "CompoundPathItem" || it.typename === "PathItem") {
+            rgb = itemRgb(it);
+            if (rgb && rgbKey(rgb) !== want) return false;
+        }
+    }
+    return true;
+}
+
+function findLayerNamed(container, name) {
+    var layers = container.layers;
+    var i, found;
+    if (!layers) return null;
+    for (i = 0; i < layers.length; i++) {
+        if (layers[i].name === name) return layers[i];
+        found = findLayerNamed(layers[i], name);
+        if (found) return found;
+    }
+    return null;
 }
 
 function holderFromName(name) {
@@ -742,7 +960,7 @@ function runIllustrator(call, done) {
     var travelBox = extraRow.add("edittext", undefined, "20");
     travelBox.characters = 4;
     extraRow.add("statictext", undefined, "Stift-Force");
-    var penBox = extraRow.add("edittext", undefined, "10");
+    var penBox = extraRow.add("edittext", undefined, "20");
     penBox.characters = 4;
     extraRow.add("statictext", undefined, "Klinge");
     var bladeBox = extraRow.add("edittext", undefined, "0.35");
@@ -753,9 +971,19 @@ function runIllustrator(call, done) {
     extraRow.add("statictext", undefined, "Overcut");
     var overBox = extraRow.add("edittext", undefined, "0");
     overBox.characters = 4;
+    extraRow.add("statictext", undefined, "Steg");
+    var stegBox = extraRow.add("edittext", undefined, "0.5");
+    stegBox.characters = 4;
+
+    var axisRow = w.add("group");
+    axisRow.add("statictext", undefined, "Y-Achse");
+    var axisList = axisRow.add("dropdownlist", undefined, ["Kraft", "Speed"]);
+    axisList.selection = 0;
 
     var markedBox = w.add("checkbox", undefined, "Nur markierte Ebenen");
     markedBox.value = false;
+    var alternateBox = w.add("checkbox", undefined, "Mehrfach abwechselnd");
+    alternateBox.value = true;
 
     var buttons = w.add("group");
     var squaresBtn = buttons.add("button", undefined, "Quadrate");
@@ -778,13 +1006,16 @@ function runIllustrator(call, done) {
         var passes = intRange(passMin, passMax, passStep, "Durchgaenge");
         if (!force || !speed || !passes) return "";
         var travel = fieldNumber(travelBox, 20);
-        var pen = fieldNumber(penBox, 10);
+        var pen = fieldNumber(penBox, 20);
+        var yAxis = axisList.selection && axisList.selection.text === "Speed" ? "speed" : "force";
         return " --pen-force " + pen
             + " --force-min " + force.min + " --force-max " + force.max + " --force-step " + force.step
             + " --speed-min " + speed.min + " --speed-max " + speed.max + " --speed-step " + speed.step
             + " --pass-min " + passes.min + " --pass-max " + passes.max + " --pass-step " + passes.step
             + " --travel " + travel
-            + " --overcut " + fieldNumber(overBox, 0);
+            + " --overcut " + fieldNumber(overBox, 0)
+            + " --steg " + fieldNumber(stegBox, 0.5)
+            + " --y-axis " + yAxis;
     }
 
     function makeSquares() {
@@ -868,7 +1099,8 @@ function runIllustrator(call, done) {
                     return;
                 }
                 bat.writeln("@echo off");
-                bat.writeln("\"" + PYTHON + "\" \"" + PLOTTER_PY + "\" \"" + jobPath + "\" --host " + trim(hostBox.text) + " --port " + trim(portBox.text) + " > \"" + logFile.fsName + "\" 2>&1");
+                var alternateFlag = alternateBox.value ? " --alternate" : "";
+                bat.writeln("\"" + PYTHON + "\" \"" + PLOTTER_PY + "\" \"" + jobPath + "\" --host " + trim(hostBox.text) + " --port " + trim(portBox.text) + alternateFlag + " > \"" + logFile.fsName + "\" 2>&1");
                 bat.writeln("echo EXIT_%ERRORLEVEL%>> \"" + logFile.fsName + "\"");
                 bat.close();
                 if (!bat.execute()) {

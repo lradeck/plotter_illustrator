@@ -30,7 +30,8 @@ def units(mm):
 
 
 def encode_job(paths, page_mm, origin_mm=(0, 0), accurate=True,
-               blade_offset_mm=0.35, overcut_mm=0.0, turn_knife_mm=0.0):
+               blade_offset_mm=0.35, overcut_mm=0.0, turn_knife_mm=0.0,
+               alternate=False):
     """Build the ASCII job CameraCut writes to the plotter.
 
     paths: dicts with holder, mode ('cut' or 'fold'), force, cut_speed,
@@ -53,7 +54,10 @@ def encode_job(paths, page_mm, origin_mm=(0, 0), accurate=True,
         parts.append(_tool_prefix(path))
         points = [(units(x), units(y)) for x, y in path["points_mm"]]
         knife = accurate and path.get("mode", "cut") == "cut"
-        radius = units(blade_offset_mm) if knife else 0
+        offset = path.get("blade_offset_mm", None)
+        if offset is None:
+            offset = blade_offset_mm
+        radius = units(offset) if knife else 0
         overcut = units(overcut_mm) if knife else 0
         turn = units(turn_knife_mm) if knife else 0
         passes = int(path.get("passes", 1))
@@ -63,6 +67,7 @@ def encode_job(paths, page_mm, origin_mm=(0, 0), accurate=True,
             points, radius, overcut, turn,
             closed=path.get("closed", True),
             passes=passes,
+            alternate=alternate and path.get("mode", "cut") == "cut",
         ))
     parts.append("U0,0 @ ")
     return "".join(parts)
@@ -80,33 +85,56 @@ def _tool_prefix(path):
     )
 
 
-def _moves(points, radius, overcut, turn, closed=True, passes=1):
+def _moves(points, radius, overcut, turn, closed=True, passes=1, alternate=False):
     if len(points) < 2:
         raise ValueError("a path needs at least two points")
     if not closed:
         # A straight stroke has no corner, so the knife is not swung.
-        # Further passes retrace the stroke with the knife still down.
-        commands = ["U%d,%d" % points[0]]
-        forward = True
-        for _ in range(passes):
-            seq = points if forward else list(reversed(points))
-            if commands[-1][0] == "D":
-                seq = seq[1:]
-            for point in seq:
+        # Every pass starts with the knife up. Without alternating, every
+        # pass runs the same direction. With it, even passes start at the
+        # other end. The knife never travels back while it is down.
+        commands = []
+        for lap in range(passes):
+            stroke = list(reversed(points)) if alternate and lap % 2 == 1 else points
+            commands.append("U%d,%d" % stroke[0])
+            for point in stroke:
                 commands.append("D%d,%d" % point)
-            forward = not forward
         return " ".join(commands) + " "
-    outline = _outline(points, radius)
+    # Each lap is its own pen-down and starts one corner further on, so the
+    # cutter cannot drop the repeat and the same side is not the entry twice.
+    # The swing that aligns the blade is cut before the first side. Without
+    # it that side is scored while the knife is still turning.
     commands = []
-    if turn > 0 and len(outline) >= 2:
-        commands.extend(_turn_knife(outline[0], outline[1], turn))
-    commands.append("U%d,%d" % outline[0])
-    for _ in range(passes):
-        for point in outline:
-            commands.append("D%d,%d" % point)
-    if overcut > 0 and len(outline) >= 2:
-        commands.append("D%d,%d" % _extend(outline[0], outline[1], overcut))
+    count = len(points)
+    for lap in range(passes):
+        shift = lap % count
+        ring = points[shift:] + points[:shift]
+        if alternate and lap % 2 == 1:
+            ring = list(reversed(ring))
+        outline = _outline(ring, radius)
+        lead = _lead_in(ring, radius)
+        if turn > 0 and len(outline) >= 2:
+            commands.extend(_turn_knife(outline[0], outline[1], turn))
+        if len(lead) >= 2 and lead[-1] == outline[0]:
+            commands.append("U%d,%d" % lead[0])
+            for point in lead:
+                commands.append("D%d,%d" % point)
+            for point in outline[1:]:
+                commands.append("D%d,%d" % point)
+        else:
+            commands.append("U%d,%d" % outline[0])
+            for point in outline:
+                commands.append("D%d,%d" % point)
+        if overcut > 0 and len(outline) >= 2:
+            commands.append("D%d,%d" % _extend(outline[0], outline[1], overcut))
     return " ".join(commands) + " "
+
+
+def _lead_in(points, radius):
+    """Corner swing that aims the blade along the side into the first vertex."""
+    if radius <= 0 or len(points) < 3:
+        return []
+    return _corner_arc(points[-2], points[-1], points[0], radius)
 
 
 def _outline(points, radius):

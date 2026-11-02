@@ -20,7 +20,7 @@ body {
 
 .tools {
     display: grid;
-    grid-template-columns: 1fr 1.3fr;
+    grid-template-columns: 1fr 1.3fr 52px;
     gap: 8px;
 }
 
@@ -68,6 +68,7 @@ body {
 }
 
 .range-name { color: #f2f2f2; }
+.limit { color: #9a9a9a; font-size: 11px; }
 
 .line {
     display: flex;
@@ -88,6 +89,7 @@ input, select {
 }
 
 input { width: 52px; max-width: 100%; }
+select.angle { width: 64px; }
 .range input { width: 52px; }
 #host { width: 128px; }
 #port { width: 58px; }
@@ -146,6 +148,22 @@ input { width: 52px; max-width: 100%; }
     flex: 0 0 auto;
 }
 
+.configs { margin-top: 14px; }
+#config-list { width: 148px; max-width: 100%; }
+#config-name { width: 120px; }
+
+.configs button {
+    appearance: none;
+    border: 1px solid #555;
+    background: #3a3a3a;
+    color: #f2f2f2;
+    border-radius: 4px;
+    padding: 6px 8px;
+    cursor: pointer;
+}
+
+.configs button:disabled { opacity: 0.45; cursor: default; }
+
 #apply, #reread {
     appearance: none;
     border: 1px solid #555;
@@ -156,10 +174,64 @@ input { width: 52px; max-width: 100%; }
     cursor: pointer;
 }
 
+#reread {
+    width: 28px;
+    height: 28px;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#reread svg { width: 16px; height: 16px; }
+
 #apply:disabled, #reread:disabled { opacity: 0.45; cursor: default; }
 
 #status {
     min-height: 32px;
     color: #d0d0d0;
     line-height: 1.35;
+}
+
+#color-config { width: 148px; max-width: 100%; }
+
+#color-load, #square-draw, #connection-save, .sheet-head button {
+    appearance: none;
+    border: 1px solid #555;
+    background: #3a3a3a;
+    color: #f2f2f2;
+    border-radius: 4px;
+    padding: 6px 10px;
+    cursor: pointer;
+}
+
+#square-draw, #connection-save { align-self: flex-start; }
+
+.sheet {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+    overflow: auto;
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.sheet.open { display: block; }
+
+.sheet-card {
+    margin: 8px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: #2c2c2c;
+    border: 1px solid #555;
+    border-radius: 8px;
+}
+
+.sheet-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: #f2f2f2;
 }

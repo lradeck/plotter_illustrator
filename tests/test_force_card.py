@@ -1,6 +1,7 @@
 """Force and speed card: stacked pass areas, colored 10 mm squares."""
 
 import os
+import re
 import sys
 import unittest
 
@@ -9,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "plotter"))
 from force_card import (
     FORCE_MAX,
     FORCE_MIN,
+    GLYPHS,
     PAGE_MM,
     PASSES,
     PEN_RGB,
@@ -17,6 +19,7 @@ from force_card import (
     TRAVEL,
     build_force_card,
     rgb_for,
+    text_strokes,
 )
 from protocol import encode_job, parse_job, units
 
@@ -25,7 +28,137 @@ class PassesTest(unittest.TestCase):
     def test_extra_passes_repeat_the_outline(self):
         once = _downs(_square(passes=1))
         twice = _downs(_square(passes=2))
+        thrice = _downs(_square(passes=3))
         self.assertEqual(len(twice), len(once) * 2)
+        self.assertEqual(len(thrice), len(once) * 3)
+        self.assertEqual(_laps(_square(passes=2)), 2)
+        self.assertEqual(_laps(_square(passes=3)), 3)
+
+    def test_open_passes_lift_instead_of_reversing(self):
+        text = encode_job([
+            {
+                "holder": "left",
+                "mode": "cut",
+                "force": 12,
+                "cut_speed": 20,
+                "travel_speed": 20,
+                "closed": False,
+                "passes": 3,
+                "points_mm": [[0, 0], [10, 0]],
+            }
+        ], (100, 100), accurate=False, turn_knife_mm=0, overcut_mm=0)
+        moves = parse_job(text)["moves"]
+        if moves[-1] == ("U", 0, 0):
+            moves = moves[:-1]
+        ends = [move for move in moves if move[0] == "D" and move[1] == units(10)]
+        self.assertEqual(len(ends), 3)
+        lifted = True
+        at_end = False
+        for move in moves:
+            if move[0] == "U":
+                lifted = True
+                continue
+            if at_end and move[1] == 0:
+                self.assertTrue(lifted)
+            at_end = move[1] == units(10)
+            lifted = False
+
+    def test_alternate_passes_start_at_the_other_end(self):
+        text = encode_job([
+            {
+                "holder": "left",
+                "mode": "cut",
+                "force": 12,
+                "cut_speed": 20,
+                "travel_speed": 20,
+                "closed": False,
+                "passes": 3,
+                "points_mm": [[0, 0], [10, 0]],
+            }
+        ], (100, 100), accurate=False, turn_knife_mm=0, overcut_mm=0, alternate=True)
+        starts = []
+        lifted = True
+        for kind, x, _y in _raw_moves(text):
+            if kind == "U":
+                lifted = True
+                continue
+            if lifted:
+                starts.append(x)
+            lifted = False
+        self.assertEqual(starts, [0, units(10), 0])
+
+    def test_alternate_closed_pass_runs_backwards(self):
+        text = encode_job([
+            {
+                "holder": "left",
+                "mode": "cut",
+                "force": 12,
+                "cut_speed": 20,
+                "travel_speed": 20,
+                "closed": True,
+                "passes": 2,
+                "points_mm": [[0, 0], [10, 0], [10, 10], [0, 10]],
+            }
+        ], (100, 100), accurate=False, turn_knife_mm=0, overcut_mm=0, alternate=True)
+        starts = []
+        lifted = True
+        for kind, x, y in _raw_moves(text):
+            if kind == "U":
+                lifted = True
+                continue
+            if lifted:
+                starts.append((x, y))
+            lifted = False
+        self.assertEqual(starts[0], (0, 0))
+        self.assertEqual(starts[1], (0, 0))
+        seconds = []
+        lifted = True
+        pending = None
+        for kind, x, y in _raw_moves(text):
+            if kind == "U":
+                lifted = True
+                pending = None
+                continue
+            if lifted:
+                pending = (x, y)
+                lifted = False
+                continue
+            if pending is not None:
+                seconds.append((x, y))
+                pending = None
+        self.assertNotEqual(seconds[0], seconds[1])
+
+    def test_alternate_leaves_the_pen_in_one_direction(self):
+        text = encode_job([
+            {
+                "holder": "right",
+                "mode": "pen",
+                "force": 20,
+                "cut_speed": 20,
+                "travel_speed": 20,
+                "closed": False,
+                "passes": 2,
+                "points_mm": [[0, 0], [10, 0]],
+            }
+        ], (100, 100), accurate=False, turn_knife_mm=0, overcut_mm=0, alternate=True)
+        starts = []
+        lifted = True
+        for kind, x, _y in _raw_moves(text):
+            if kind == "U":
+                lifted = True
+                continue
+            if lifted:
+                starts.append(x)
+            lifted = False
+        self.assertEqual(starts, [0, 0])
+
+    def test_a_digit_is_one_continuous_pen_stroke(self):
+        for char in "01256789":
+            strokes = text_strokes(char, 6, 0, 0)
+            self.assertEqual(len(strokes), 1, char)
+            self.assertGreater(_path_length(strokes), _glyph_length(char) * 0.9, char)
+        self.assertEqual(len(text_strokes("8", 3.2, 0, 0)), 1)
+        self.assertGreater(len(text_strokes("8", 3.2, 0, 0)[0]), 4)
 
     def test_pen_stroke_stays_open(self):
         text = encode_job([
@@ -80,22 +213,26 @@ class ForceCardTest(unittest.TestCase):
         self.assertGreater(min(bottoms[1]), max(bottoms[2]))
         self.assertGreater(min(bottoms[2]), max(bottoms[3]))
         for passes in PASSES:
-            for force in range(FORCE_MIN, FORCE_MAX + 1):
-                rows = [
+            for speed in SPEEDS:
+                column = [
                     path for path in self.cuts
-                    if path["passes"] == passes and path["force"] == force
+                    if path["passes"] == passes and path["cut_speed"] == speed
                 ]
-                rows.sort(key=lambda path: path["cut_speed"])
-                heights = [path["points_mm"][0][1] for path in rows]
+                column.sort(key=lambda path: path["force"])
+                heights = [path["points_mm"][0][1] for path in column]
                 self.assertEqual(heights, sorted(heights, reverse=True))
-                self.assertEqual([path["cut_speed"] for path in rows], SPEEDS)
+                self.assertEqual(
+                    [path["force"] for path in column],
+                    list(range(FORCE_MIN, FORCE_MAX + 1)),
+                )
 
     def test_pen_labels_name_both_axes_and_the_passes(self):
         for path in self.pens:
             self.assertEqual(path["holder"], "right")
             self.assertEqual(path["mode"], "pen")
             self.assertEqual(path["rgb"], PEN_RGB)
-            self.assertEqual(path["layer"], "Right Stift F10 S20 T20 x1")
+            self.assertEqual(path["layer"], "Right Stift F20 S20 T20 x1")
+            self.assertEqual(path["cut_speed"], 20)
             self.assertFalse(path["closed"])
         for passes in PASSES:
             area = [cut for cut in self.cuts if cut["passes"] == passes]
@@ -112,7 +249,7 @@ class ForceCardTest(unittest.TestCase):
                 right = cut["points_mm"][1][0]
                 above = [
                     pen for pen in self.pens
-                    if pen["label"] == "F%d" % cut["force"]
+                    if pen["label"] == "S%d" % cut["cut_speed"]
                     and _inside_column(pen, left, right)
                     and _bottom(pen) >= cut["points_mm"][2][1]
                 ]
@@ -123,13 +260,35 @@ class ForceCardTest(unittest.TestCase):
                 top_edge = cut["points_mm"][2][1]
                 beside = []
                 for pen in self.pens:
-                    if pen["label"] != "S%d" % cut["cut_speed"]:
+                    if pen["label"] != "F%d" % cut["force"]:
                         continue
                     xs = [point[0] for point in pen["points_mm"]]
                     ys = [point[1] for point in pen["points_mm"]]
                     if max(xs) < left and min(ys) >= bottom - 1 and max(ys) <= top_edge + 1:
                         beside.append(pen)
                 self.assertGreater(len(beside), 0)
+
+    def test_pen_draws_at_pen_speed_while_travel_stays_fast(self):
+        job = build_force_card(travel=400, pen_speed=20)
+        pens = [path for path in job["paths"] if path["mode"] == "pen"]
+        self.assertGreater(len(pens), 0)
+        for path in pens:
+            self.assertEqual(path["cut_speed"], 20)
+            self.assertEqual(path["travel_speed"], 400)
+            self.assertEqual(path["layer"], "Right Stift F20 S20 T400 x1")
+        cuts = [path for path in job["paths"] if path["mode"] == "cut"]
+        self.assertTrue(all(path["travel_speed"] == 400 for path in cuts))
+
+    def test_pen_on_the_left_puts_the_knife_on_the_right(self):
+        job = build_force_card(pen_holder="left")
+        pens = [path for path in job["paths"] if path["mode"] == "pen"]
+        cuts = [path for path in job["paths"] if path["mode"] == "cut"]
+        self.assertGreater(len(pens), 0)
+        self.assertGreater(len(cuts), 0)
+        self.assertTrue(all(path["holder"] == "left" for path in pens))
+        self.assertTrue(all(path["layer"].startswith("Left Stift ") for path in pens))
+        self.assertTrue(all(path["holder"] == "right" for path in cuts))
+        self.assertTrue(all(path["layer"].startswith("Right F") for path in cuts))
 
     def test_everything_lands_on_the_mat(self):
         page = self.job["page_mm"]
@@ -157,6 +316,45 @@ class ForceCardTest(unittest.TestCase):
         ]))
         self.assertTrue(all(path["travel_speed"] == 15 for path in cuts))
         self.assertTrue(all("T15" in path["layer"] for path in cuts))
+
+    def test_axis_titles_name_force_and_speed(self):
+        labels = set(pen["label"] for pen in self.pens)
+        self.assertIn("Kraft", labels)
+        self.assertIn("Speed", labels)
+        one_x_top = max(
+            point[1] for pen in self.pens if pen["label"] == "1x" for point in pen["points_mm"]
+        )
+        speed = [pen for pen in self.pens if pen["label"] == "Speed"]
+        self.assertTrue(speed)
+        speed_bottom = min(point[1] for pen in speed for point in pen["points_mm"])
+        self.assertGreater(speed_bottom, one_x_top)
+        kraft_x = min(point[0] for pen in self.pens if pen["label"] == "Kraft" for point in pen["points_mm"])
+        number_x = min(
+            point[0] for pen in self.pens if pen["label"].startswith("F") and pen["label"][1:].isdigit()
+            for point in pen["points_mm"]
+        )
+        self.assertLess(kraft_x, number_x)
+
+    def test_squares_are_ordered_as_a_snake(self):
+        job = build_force_card(
+            force_min=10, force_max=20, force_step=10,
+            speed_min=10, speed_max=20, speed_step=10,
+            pass_min=1, pass_max=1, pass_step=1,
+        )
+        cuts = sorted(
+            (path for path in job["paths"] if path["mode"] == "cut"),
+            key=lambda path: path["order"],
+        )
+        corners = [
+            (round(min(pt[0] for pt in path["points_mm"]), 1),
+             round(min(pt[1] for pt in path["points_mm"]), 1))
+            for path in cuts
+        ]
+        self.assertEqual(corners[0][1], corners[1][1])
+        self.assertLess(corners[0][0], corners[1][0])
+        self.assertGreater(corners[0][1], corners[2][1])
+        self.assertEqual(corners[2][1], corners[3][1])
+        self.assertGreater(corners[2][0], corners[3][0])
 
     def test_overcut_crosses_four_open_lines_at_the_corners(self):
         job = build_force_card(
@@ -200,7 +398,64 @@ class ForceCardTest(unittest.TestCase):
                 allowed.add((units(point[0]), units(point[1])))
         for move in downs:
             self.assertIn((move[1], move[2]), allowed)
-        self.assertEqual(len(downs), 3 * 4)
+        self.assertEqual(len(downs), 2 * 2 * 4)
+
+    def test_overcuts_stop_short_of_the_next_square(self):
+        job = build_force_card(
+            force_min=10, force_max=20, force_step=10,
+            speed_min=10, speed_max=20, speed_step=10,
+            pass_min=1, pass_max=1, pass_step=1,
+            overcut=4,
+        )
+        cuts = [path for path in job["paths"] if path["mode"] == "cut"]
+        self.assertTrue(_tips_only_meet(_axis_spans(cuts, 1)))
+        self.assertTrue(_tips_only_meet(_axis_spans(cuts, 0)))
+
+    def test_speed_can_be_the_vertical_axis(self):
+        job = build_force_card(
+            force_min=10, force_max=10, force_step=1,
+            speed_min=10, speed_max=30, speed_step=10,
+            pass_min=1, pass_max=1, pass_step=1,
+            y_axis="speed",
+        )
+        cuts = [path for path in job["paths"] if path["mode"] == "cut"]
+        height = {}
+        for path in cuts:
+            height[path["cut_speed"]] = path["points_mm"][0][1]
+        self.assertGreater(height[10], height[20])
+        self.assertGreater(height[20], height[30])
+        self.assertEqual(len(set(path["points_mm"][0][0] for path in cuts)), 1)
+
+    def test_steg_leaves_a_centered_gap_on_every_side(self):
+        job = build_force_card(
+            force_min=10, force_max=10, force_step=1,
+            speed_min=20, speed_max=20, speed_step=10,
+            pass_min=1, pass_max=1, pass_step=1,
+            overcut=1.5,
+            steg=0.5,
+        )
+        cuts = [path for path in job["paths"] if path["mode"] == "cut"]
+        self.assertEqual(len(cuts), 8)
+        self.assertTrue(all(path["closed"] is False for path in cuts))
+        horizontal = {}
+        vertical = {}
+        for path in cuts:
+            start, end = path["points_mm"]
+            if start[1] == end[1]:
+                horizontal.setdefault(start[1], []).append(sorted([start[0], end[0]]))
+            else:
+                vertical.setdefault(start[0], []).append(sorted([start[1], end[1]]))
+        self.assertEqual(len(horizontal), 2)
+        self.assertEqual(len(vertical), 2)
+        for spans in list(horizontal.values()) + list(vertical.values()):
+            spans.sort()
+            self.assertEqual(len(spans), 2)
+            self.assertAlmostEqual(spans[1][0] - spans[0][1], 0.5, places=3)
+            outer = spans[1][1] - spans[0][0]
+            self.assertAlmostEqual(outer, SQUARE_MM + 3.0, places=3)
+            gap_center = (spans[0][1] + spans[1][0]) / 2.0
+            side_center = (spans[0][0] + spans[1][1]) / 2.0
+            self.assertAlmostEqual(gap_center, side_center, places=3)
 
     def test_script_is_a_plot_panel_for_the_real_plotter(self):
         path = os.path.join(os.path.dirname(__file__), "..", "Krafttest.jsx")
@@ -215,14 +470,92 @@ class ForceCardTest(unittest.TestCase):
         self.assertIn("selectedOnly", source)
         self.assertIn("--force-min", source)
         self.assertIn("--overcut", source)
+        self.assertIn("--steg", source)
+        self.assertIn("--alternate", source)
         self.assertIn("item.filled = false", source)
         self.assertIn("if (item.stroked) return asRgb(item.strokeColor);", source)
         self.assertIn("Nur markierte Ebenen", source)
         self.assertIn("isComplete", source)
+        self.assertIn("logLine", source)
+        self.assertNotIn("if (isComplete(readLayerSettings(item.layers))) continue;", source)
+        self.assertNotIn("settings[rgbKey(item.rgb)]", source)
         self.assertIn("sweepEmptyLayers", source)
+        self.assertIn("order: order", source)
+        self.assertIn("applyColorName", source)
+        self.assertNotIn("if (mode === \"pen\") holder = \"right\";", source)
         self.assertNotIn("COLORS_FILE", source)
         self.assertIn("left", source)
         self.assertIn("right", source)
+        panel = os.path.join(os.path.dirname(__file__), "..", "plugin", "index.html")
+        with open(panel, "r") as handle:
+            html = handle.read()
+        self.assertIn("max 500", html)
+        self.assertIn("max 800", html)
+        self.assertIn('id="pen" value="20"', html)
+        self.assertIn('id="y-axis"', html)
+        self.assertIn('id="steg" value="0.5"', html)
+        self.assertIn('id="alternate"', html)
+        self.assertIn('id="config-save"', html)
+        self.assertIn('id="config-load"', html)
+        self.assertIn('id="config-rename"', html)
+        self.assertIn('id="config-delete"', html)
+        self.assertIn('id="settings"', html)
+        self.assertIn('id="color-load"', html)
+        self.assertIn('id="square-draw"', html)
+        self.assertNotIn("Cut speed", html)
+        self.assertIn('id="cfg-depth"', html)
+        self.assertIn('id="cfg-offset"', html)
+        self.assertIn('id="cfg-angle"', html)
+        self.assertIn('id="offset" value="0.35"', html)
+        self.assertIn('value="30"', html)
+        self.assertIn('value="60"', html)
+        self.assertIn('id="config-export"', html)
+        self.assertIn('id="config-import"', html)
+        self.assertIn('id="pen-holder"', html)
+        self.assertIn('id="pen-speed" value="20"', html)
+        self.assertIn("Travel speed", html)
+        self.assertIn("Pen force", html)
+        self.assertNotIn("cfg-force-min", html)
+        self.assertIn('id="cfg-force"', html)
+        self.assertNotIn("Strichfarbe waehlen", html)
+        self.assertIn(">Material<", html)
+
+
+def _axis_spans(cuts, axis):
+    grouped = {}
+    for path in cuts:
+        a, b = path["points_mm"]
+        if a[axis] != b[axis]:
+            continue
+        key = round(a[axis], 3)
+        other = 1 - axis
+        grouped.setdefault(key, []).append(tuple(sorted((a[other], b[other]))))
+    return list(grouped.values())
+
+
+def _tips_only_meet(groups):
+    for spans in groups:
+        ordered = sorted(spans)
+        for left, right in zip(ordered, ordered[1:]):
+            if right[0] - left[1] < 0.999:
+                return False
+    return True
+
+
+def _glyph_length(char):
+    total = 0.0
+    for stroke in GLYPHS[char]:
+        for start, end in zip(stroke, stroke[1:]):
+            total += abs(end[0] - start[0]) + abs(end[1] - start[1])
+    return total
+
+
+def _path_length(strokes):
+    total = 0.0
+    for stroke in strokes:
+        for start, end in zip(stroke, stroke[1:]):
+            total += abs(end[0] - start[0]) + abs(end[1] - start[1])
+    return total
 
 
 def _covers(path, corner):
@@ -242,6 +575,15 @@ def _bottom(path):
     return min(point[1] for point in path["points_mm"])
 
 
+def _raw_moves(text):
+    body = text.split("@", 1)[0]
+    found = re.findall(r"([UD])(-?\d+),(-?\d+)", body)
+    moves = [(kind, int(x), int(y)) for kind, x, y in found]
+    if moves and moves[-1] == ("U", 0, 0):
+        moves = moves[:-1]
+    return moves
+
+
 def _square(passes):
     return {
         "holder": "left",
@@ -256,10 +598,24 @@ def _square(passes):
 
 
 def _downs(path):
-    text = encode_job(
+    return [move for move in _moves(path) if move[0] == "D"]
+
+
+def _laps(path):
+    text = _text(path)
+    body = text[:text.rfind("@")]
+    body = body[:body.rfind("U")]
+    return len(re.findall(r"(?:^|[\s;])U-?\d+,-?\d+", body))
+
+
+def _moves(path):
+    return parse_job(_text(path))["moves"]
+
+
+def _text(path):
+    return encode_job(
         [path], (100, 100), accurate=False, turn_knife_mm=0, overcut_mm=0
     )
-    return [move for move in parse_job(text)["moves"] if move[0] == "D"]
 
 
 if __name__ == "__main__":

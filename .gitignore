@@ -7,6 +7,9 @@ venv/
 
 # Written by the old color list. Cut settings live in the layer names.
 colors.json
+configurations.json
+connection.json
+materials.yaml
 
 # Jobs saved while fake_plotter.py is listening.
 captures/job_*.bin

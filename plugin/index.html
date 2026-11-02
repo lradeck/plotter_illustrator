@@ -24,78 +24,189 @@
             </svg>
             <span>Plot</span>
         </button>
+        <button id="settings" type="button" title="Einstellungen">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="none" stroke="#f2f2f2" stroke-width="1.6" d="M10.3 2.5h3.4l.4 2.4a7.2 7.2 0 0 1 1.8.9l2.2-1.1 2.4 2.4-1.1 2.2c.4.6.7 1.2.9 1.8l2.4.4v3.4l-2.4.4a7.2 7.2 0 0 1-.9 1.8l1.1 2.2-2.4 2.4-2.2-1.1a7.2 7.2 0 0 1-1.8.9l-.4 2.4h-3.4l-.4-2.4a7.2 7.2 0 0 1-1.8-.9l-2.2 1.1-2.4-2.4 1.1-2.2a7.2 7.2 0 0 1-.9-1.8l-2.4-.4V11l2.4-.4c.2-.6.5-1.2.9-1.8L3.5 6.6l2.4-2.4 2.2 1.1a7.2 7.2 0 0 1 1.8-.9l.4-2.4z"/>
+                <circle cx="12" cy="12" r="2.6" fill="none" stroke="#f2f2f2" stroke-width="1.6"/>
+            </svg>
+        </button>
     </div>
-
-    <div class="host">
-        <label for="host">IP</label>
-        <input id="host" value="192.168.0.200">
-        <label for="port">Port</label>
-        <input id="port" value="8080">
-    </div>
-
-    <div class="range">
-        <div class="range-name">Force</div>
-        <div class="line">
-            <label for="force-min">von</label><input id="force-min" value="10">
-            <label for="force-max">bis</label><input id="force-max" value="25">
-            <label for="force-step">Schritt</label><input id="force-step" value="1">
-        </div>
-    </div>
-    <div class="range">
-        <div class="range-name">Speed</div>
-        <div class="line">
-            <label for="speed-min">von</label><input id="speed-min" value="10">
-            <label for="speed-max">bis</label><input id="speed-max" value="50">
-            <label for="speed-step">Schritt</label><input id="speed-step" value="10">
-        </div>
-    </div>
-    <div class="range">
-        <div class="range-name">Durchgaenge</div>
-        <div class="line">
-            <label for="pass-min">von</label><input id="pass-min" value="1">
-            <label for="pass-max">bis</label><input id="pass-max" value="3">
-            <label for="pass-step">Schritt</label><input id="pass-step" value="1">
-        </div>
-    </div>
-
-    <div class="machine">
-        <label for="travel">Travel</label><input id="travel" value="20">
-        <label for="pen">Stift-Force</label><input id="pen" value="10">
-        <label for="blade">Klinge mm</label><input id="blade" value="0.35">
-        <label for="turn">Drehen mm</label><input id="turn" value="1">
-        <label for="overcut" title="0 zeichnet ein geschlossenes Quadrat. Ein Wert darueber zeichnet vier Linien, die um diese Millimeter an den Ecken ueberstehen.">Overcut mm</label><input id="overcut" value="0" title="0 zeichnet ein geschlossenes Quadrat. Ein Wert darueber zeichnet vier Linien, die um diese Millimeter an den Ecken ueberstehen.">
-    </div>
-
-    <label class="check" for="marked">
-        <input id="marked" type="checkbox">
-        Nur markierte Ebenen
-    </label>
 
     <div class="colorhead">
         <span>Strichfarben</span>
-        <button id="reread" type="button">Lesen</button>
+        <button id="reread" type="button" title="Strichfarben neu lesen">
+            <svg viewBox="0 0 32 32" aria-hidden="true">
+                <path d="M26 16a10 10 0 1 1-3-7.1" fill="none" stroke="#f2f2f2" stroke-width="2"/>
+                <path d="M26 5v7h-7" fill="none" stroke="#f2f2f2" stroke-width="2"/>
+            </svg>
+        </button>
     </div>
     <ul id="colors"></ul>
+    <div class="line">
+        <select id="color-config" title="Gespeicherte Einstellung"></select>
+        <button id="color-load" type="button">Laden</button>
+    </div>
     <div class="fields">
-        <label for="holder">Halter</label>
+        <label for="holder">Holder</label>
         <select id="holder">
-            <option value="left">links</option>
-            <option value="right">rechts</option>
+            <option value="left">Left</option>
+            <option value="right">Right</option>
         </select>
-        <label for="force">F</label><input id="force" value="20">
-        <label for="speed">S</label><input id="speed" value="20">
-        <label for="travel-set">T</label><input id="travel-set" value="20">
-        <label for="passes">x</label><input id="passes" value="1">
-        <label for="mode">Art</label>
+        <label for="force">Force <span class="limit">max 500</span></label><input id="force" value="20" title="Maximum 500">
+        <label for="speed">Speed <span class="limit">max 800</span></label><input id="speed" value="20" title="Maximum 800">
+        <label for="travel-set">Travel speed</label><input id="travel-set" value="20">
+        <label for="passes">Passes</label><input id="passes" value="1">
+        <label for="depth">Cut depth</label><input id="depth" value="0" title="Wird gespeichert und nicht an den Plotter gesendet.">
+        <label for="offset">Offset</label>
+        <select id="angle" class="angle" title="30 Grad setzt 0.25 mm, 45 Grad 0.30 mm, 60 Grad 0.40 mm. Das Feld bleibt editierbar.">
+            <option value="">°</option>
+            <option value="30">30°</option>
+            <option value="45">45°</option>
+            <option value="60">60°</option>
+        </select>
+        <input id="offset" value="0.35" title="Messerversatz in Millimetern. Der Winkel fuellt einen Vorschlag, den du aendern kannst.">
+        <label for="mode">Mode</label>
         <select id="mode">
-            <option value="cut">schneiden</option>
-            <option value="pen">stift</option>
-            <option value="fold">falzen</option>
+            <option value="cut">Cut</option>
+            <option value="pen">Pen</option>
+            <option value="fold">Fold</option>
         </select>
         <button id="apply" type="button">Uebernehmen</button>
     </div>
 
-    <div id="status">Vollstaendiger Name Left F10 S20 T20 x1 gilt zuerst. Sonst die Strichfarbe. Lesen holt Farben von unvollstaendigen Ebenen.</div>
+    <div id="status"></div>
+
+    <div id="square-sheet" class="sheet">
+        <div class="sheet-card">
+            <div class="sheet-head">
+                <span>Quadrate</span>
+                <button id="square-close" type="button">Schliessen</button>
+            </div>
+            <div class="range">
+                <div class="range-name">Force <span class="limit">max 500</span></div>
+                <div class="line">
+                    <label for="force-min">von</label><input id="force-min" value="10">
+                    <label for="force-max">bis</label><input id="force-max" value="25">
+                    <label for="force-step">Schritt</label><input id="force-step" value="1">
+                </div>
+            </div>
+            <div class="range">
+                <div class="range-name">Speed <span class="limit">max 800</span></div>
+                <div class="line">
+                    <label for="speed-min">von</label><input id="speed-min" value="10">
+                    <label for="speed-max">bis</label><input id="speed-max" value="50">
+                    <label for="speed-step">Schritt</label><input id="speed-step" value="10">
+                </div>
+            </div>
+            <div class="range">
+                <div class="range-name">Passes</div>
+                <div class="line">
+                    <label for="pass-min">von</label><input id="pass-min" value="1">
+                    <label for="pass-max">bis</label><input id="pass-max" value="3">
+                    <label for="pass-step">Schritt</label><input id="pass-step" value="1">
+                </div>
+            </div>
+            <div class="range">
+                <div class="range-name">Y axis</div>
+                <div class="line">
+                    <select id="y-axis">
+                        <option value="force" selected>Force</option>
+                        <option value="speed">Speed</option>
+                    </select>
+                </div>
+            </div>
+            <div class="machine">
+                <label for="travel">Travel speed <span class="limit">max 800</span></label><input id="travel" value="20">
+                <label for="pen">Pen force <span class="limit">max 500</span></label><input id="pen" value="20">
+                <label for="pen-speed">Pen speed <span class="limit">max 800</span></label><input id="pen-speed" value="20" title="Maximum 800">
+                <label for="pen-holder">Pen holder</label>
+                <select id="pen-holder" title="Der Schnitt benutzt den anderen Halter.">
+                    <option value="right" selected>Right</option>
+                    <option value="left">Left</option>
+                </select>
+                <label for="overcut" title="0 zeichnet ein geschlossenes Quadrat. Ein Wert darueber zeichnet vier Linien, die um diese Millimeter an den Ecken ueberstehen.">Overcut</label><input id="overcut" value="0" title="0 zeichnet ein geschlossenes Quadrat. Ein Wert darueber zeichnet vier Linien, die um diese Millimeter an den Ecken ueberstehen.">
+                <label for="steg" title="0 schneidet die Seite durch. Ein Wert laesst in der Mitte jeder Seite eine Luecke dieser Breite.">Steg</label><input id="steg" value="0.5" title="0 schneidet die Seite durch. Ein Wert laesst in der Mitte jeder Seite eine Luecke dieser Breite.">
+            </div>
+            <div class="configs">
+                <div class="range-name">Einstellung</div>
+                <div class="line">
+                    <select id="square-config" title="Gespeicherte Einstellung"></select>
+                    <button id="config-load" type="button">Laden</button>
+                </div>
+            </div>
+            <button id="square-draw" type="button">Zeichnen</button>
+        </div>
+    </div>
+
+    <div id="settings-sheet" class="sheet">
+        <div class="sheet-card">
+            <div class="sheet-head">
+                <span>Einstellungen</span>
+                <button id="settings-close" type="button">Schliessen</button>
+            </div>
+            <div class="range-name">Verbindung</div>
+            <div class="host">
+                <label for="host">IP</label>
+                <input id="host" value="192.168.0.200">
+                <label for="port">Port</label>
+                <input id="port" value="8080">
+            </div>
+            <div class="machine">
+                <label for="blade" title="Standard, wenn der Ebenenname kein O enthaelt.">Offset</label><input id="blade" value="0.35" title="Standard, wenn der Ebenenname kein O enthaelt.">
+                <label for="turn">Turn</label><input id="turn" value="1">
+            </div>
+            <label class="check" for="marked">
+                <input id="marked" type="checkbox">
+                Nur markierte Ebenen
+            </label>
+            <label class="check" for="alternate" title="Jeder weitere Durchgang startet am anderen Ende. Dazwischen wird das Messer angehoben.">
+                <input id="alternate" type="checkbox" checked>
+                Mehrfach abwechselnd
+            </label>
+            <button id="connection-save" type="button">Speichern</button>
+            <div class="configs">
+                <div class="range-name">Material</div>
+                <div class="line">
+                    <select id="config-list" title="Gespeicherte Einstellung"></select>
+                    <input id="config-name" placeholder="Name">
+                </div>
+                <div class="line">
+                    <button id="config-edit-load" type="button">Laden</button>
+                    <button id="config-save" type="button">Speichern</button>
+                    <button id="config-rename" type="button">Umbenennen</button>
+                    <button id="config-delete" type="button">Loeschen</button>
+                    <button id="config-export" type="button">Export</button>
+                    <button id="config-import" type="button">Import</button>
+                </div>
+                <div class="fields">
+                    <label for="cfg-holder">Holder</label>
+                    <select id="cfg-holder">
+                        <option value="left">Left</option>
+                        <option value="right">Right</option>
+                    </select>
+                    <label for="cfg-force">Force <span class="limit">max 500</span></label><input id="cfg-force" value="20">
+                    <label for="cfg-speed">Speed <span class="limit">max 800</span></label><input id="cfg-speed" value="20">
+                    <label for="cfg-travel-set">Travel speed</label><input id="cfg-travel-set" value="20">
+                    <label for="cfg-passes">Passes</label><input id="cfg-passes" value="1">
+                    <label for="cfg-depth">Cut depth</label><input id="cfg-depth" value="0" title="Wird gespeichert und nicht an den Plotter gesendet.">
+                    <label for="cfg-offset">Offset</label>
+                    <select id="cfg-angle" class="angle" title="30 Grad setzt 0.25 mm, 45 Grad 0.30 mm, 60 Grad 0.40 mm. Das Feld bleibt editierbar.">
+                        <option value="">°</option>
+                        <option value="30">30°</option>
+                        <option value="45">45°</option>
+                        <option value="60">60°</option>
+                    </select>
+                    <input id="cfg-offset" value="0.35" title="Messerversatz in Millimetern. Der Winkel fuellt einen Vorschlag, den du aendern kannst.">
+                    <label for="cfg-mode">Mode</label>
+                    <select id="cfg-mode">
+                        <option value="cut">Cut</option>
+                        <option value="pen">Pen</option>
+                        <option value="fold">Fold</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script src="js/CSInterface.js"></script>
     <script>window.nodeRequire = (typeof require === "function") ? require : null;</script>
