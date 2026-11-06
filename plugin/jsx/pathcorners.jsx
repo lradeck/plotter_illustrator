@@ -675,3 +675,195 @@ function walkChains(edges, clusters) {
     }
     return chains;
 }
+
+function planOverlap(specs, overlapPt) {
+    var strokes = [];
+    var remove = [];
+    if (!specs || !(overlapPt > 0)) return { strokes: strokes, remove: remove };
+    var ends = [];
+    var i, verts;
+    for (i = 0; i < specs.length; i++) {
+        if (!specs[i] || specs[i].closed || !specs[i].verts || specs[i].verts.length < 2) continue;
+        verts = specs[i].verts;
+        ends.push({ path: i, start: true, at: verts[0].anchor });
+        ends.push({ path: i, start: false, at: verts[verts.length - 1].anchor });
+    }
+    var used = {};
+    var pairs = [];
+    var e, f, best, bestD, keyE, keyF;
+    for (e = 0; e < ends.length; e++) {
+        keyE = ends[e].path + ":" + (ends[e].start ? "s" : "e");
+        if (used[keyE]) continue;
+        best = -1;
+        bestD = WELD_PT * WELD_PT;
+        for (f = 0; f < ends.length; f++) {
+            if (ends[f].path === ends[e].path) continue;
+            keyF = ends[f].path + ":" + (ends[f].start ? "s" : "e");
+            if (used[keyF]) continue;
+            var gap = ptDist2(ends[e].at, ends[f].at);
+            if (gap <= bestD) {
+                bestD = gap;
+                best = f;
+            }
+        }
+        if (best < 0) continue;
+        keyF = ends[best].path + ":" + (ends[best].start ? "s" : "e");
+        used[keyE] = true;
+        used[keyF] = true;
+        pairs.push([ends[e], ends[best]]);
+    }
+    if (!pairs.length) return { strokes: strokes, remove: remove };
+    var extra = [];
+    for (i = 0; i < specs.length; i++) extra.push({ start: null, end: null });
+    var pair, piece;
+    for (i = 0; i < pairs.length; i++) {
+        pair = pairs[i];
+        piece = shiftOnto(takeInto(specs[pair[1].path].verts, pair[1].start, overlapPt), pair[0].at);
+        if (pair[0].start) extra[pair[0].path].start = piece;
+        else extra[pair[0].path].end = piece;
+        piece = shiftOnto(takeInto(specs[pair[0].path].verts, pair[0].start, overlapPt), pair[1].at);
+        if (pair[1].start) extra[pair[1].path].start = piece;
+        else extra[pair[1].path].end = piece;
+    }
+    var built;
+    for (i = 0; i < specs.length; i++) {
+        if (!extra[i] || (!usablePiece(extra[i].start) && !usablePiece(extra[i].end))) continue;
+        built = cloneAll(specs[i].verts);
+        if (usablePiece(extra[i].start)) built = attachPiece(built, true, extra[i].start);
+        if (usablePiece(extra[i].end)) built = attachPiece(built, false, extra[i].end);
+        strokes.push({ source: i, verts: built });
+        remove.push(i);
+    }
+    return { strokes: strokes, remove: remove };
+}
+
+function usablePiece(piece) {
+    return piece && piece.length >= 2;
+}
+
+function takeInto(verts, fromStart, dist) {
+    var oriented = cloneAll(verts);
+    if (!fromStart) reverseRun(oriented);
+    return clipForward(oriented, dist);
+}
+
+function clipForward(pts, dist) {
+    var out = [cloneVert(pts[0])];
+    var remain = dist;
+    var i, seg, t, part;
+    if (!pts || pts.length < 2 || !(dist > 0.01)) return out;
+    for (i = 0; i < pts.length - 1; i++) {
+        seg = curveLen(pts[i], pts[i + 1]);
+        if (seg < 0.01) continue;
+        if (remain >= seg - 0.01) {
+            out.push(cloneVert(pts[i + 1]));
+            remain -= seg;
+            if (remain <= 0.01) return out;
+            continue;
+        }
+        t = tForLen(pts[i], pts[i + 1], remain);
+        if (t <= 0.001) return out;
+        if (t >= 0.999) {
+            out.push(cloneVert(pts[i + 1]));
+            return out;
+        }
+        part = splitSegment(pts[i], pts[i + 1], t);
+        out[out.length - 1].right = part.a.right;
+        out.push(part.end);
+        return out;
+    }
+    return out;
+}
+
+function curveLen(a, b) {
+    return lengthUntil(a, b, 1);
+}
+
+function lengthUntil(a, b, t) {
+    var p0 = a.anchor;
+    var p1 = a.right;
+    var p2 = b.left;
+    var p3 = b.anchor;
+    var steps = 16;
+    var len = 0;
+    var prev = p0;
+    var i, u, pt, dx, dy;
+    for (i = 1; i <= steps; i++) {
+        u = t * i / steps;
+        pt = bezPoint(p0, p1, p2, p3, u);
+        dx = pt[0] - prev[0];
+        dy = pt[1] - prev[1];
+        len += Math.sqrt(dx * dx + dy * dy);
+        prev = pt;
+    }
+    return len;
+}
+
+function tForLen(a, b, target) {
+    var lo = 0;
+    var hi = 1;
+    var mid = 0.5;
+    var i;
+    for (i = 0; i < 18; i++) {
+        mid = (lo + hi) / 2;
+        if (lengthUntil(a, b, mid) < target) lo = mid;
+        else hi = mid;
+    }
+    return (lo + hi) / 2;
+}
+
+function bezPoint(p0, p1, p2, p3, t) {
+    var u = 1 - t;
+    var uu = u * u;
+    var tt = t * t;
+    return [
+        uu * u * p0[0] + 3 * uu * t * p1[0] + 3 * u * tt * p2[0] + tt * t * p3[0],
+        uu * u * p0[1] + 3 * uu * t * p1[1] + 3 * u * tt * p2[1] + tt * t * p3[1]
+    ];
+}
+
+function attachPiece(verts, atStart, piece) {
+    var copy = cloneAll(verts);
+    var rev, merged, k;
+    if (!atStart) {
+        copy[copy.length - 1].right = [piece[0].right[0], piece[0].right[1]];
+        copy[copy.length - 1].corner = true;
+        for (k = 1; k < piece.length; k++) copy.push(cloneVert(piece[k]));
+        return copy;
+    }
+    rev = cloneAll(piece);
+    reverseRun(rev);
+    copy[0].left = [rev[rev.length - 1].left[0], rev[rev.length - 1].left[1]];
+    copy[0].corner = true;
+    merged = [];
+    for (k = 0; k < rev.length - 1; k++) merged.push(rev[k]);
+    for (k = 0; k < copy.length; k++) merged.push(copy[k]);
+    return merged;
+}
+
+function shiftOnto(pts, anchor) {
+    var dx = anchor[0] - pts[0].anchor[0];
+    var dy = anchor[1] - pts[0].anchor[1];
+    var i, v;
+    if (dx * dx + dy * dy < 1e-8) return pts;
+    for (i = 0; i < pts.length; i++) {
+        v = pts[i];
+        v.anchor = [v.anchor[0] + dx, v.anchor[1] + dy];
+        v.left = [v.left[0] + dx, v.left[1] + dy];
+        v.right = [v.right[0] + dx, v.right[1] + dy];
+    }
+    return pts;
+}
+
+function cloneAll(verts) {
+    var out = [];
+    var i;
+    for (i = 0; i < verts.length; i++) out.push(cloneVert(verts[i]));
+    return out;
+}
+
+function ptDist2(a, b) {
+    var dx = a[0] - b[0];
+    var dy = a[1] - b[1];
+    return dx * dx + dy * dy;
+}

@@ -519,6 +519,8 @@ class ForceCardTest(unittest.TestCase):
         self.assertIn('id="add-cutover"', html)
         self.assertIn('id="split-inward"', html)
         self.assertIn('id="cutover"', html)
+        self.assertIn('id="add-overlap"', html)
+        self.assertIn('id="overlap"', html)
         self.assertNotIn("Cut speed", html)
         self.assertIn('id="cfg-depth"', html)
         self.assertIn('id="cfg-offset"', html)

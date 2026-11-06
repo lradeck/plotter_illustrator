@@ -195,7 +195,7 @@ select.angle { width: 64px; }
 
 #color-config { width: 148px; max-width: 100%; }
 
-#color-load, #square-draw, #connection-save, #add-cutover, #split-inward, .sheet-head button {
+#color-load, #square-draw, #connection-save, #add-cutover, #split-inward, #add-overlap, .sheet-head button {
     appearance: none;
     border: 1px solid #555;
     background: #3a3a3a;

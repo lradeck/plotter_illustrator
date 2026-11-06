@@ -267,4 +267,58 @@ assert.ok(irregularPlan.strokes.length >= 3, "irregular polygon from lines");
 var irregularIn = ctx.planCut(linesOf(irregular), 0, true);
 assert.ok(irregularIn.strokes.length > irregularPlan.strokes.length, "inward split finds the notch");
 
+function strokeOf(plan, source) {
+    var i;
+    for (i = 0; i < plan.strokes.length; i++) {
+        if (plan.strokes[i].source === source) return plan.strokes[i].verts;
+    }
+    return null;
+}
+
+var elbowA = { closed: false, verts: [V(0, 0), V(100, 0)] };
+var elbowB = { closed: false, verts: [V(100, 0), V(100, 40)] };
+var elbowOver = ctx.planOverlap([elbowA, elbowB], 10);
+var overA = strokeOf(elbowOver, 0);
+var overB = strokeOf(elbowOver, 1);
+assert.ok(overA && overB, "both paths overlap");
+assert.ok(dist(overA[overA.length - 1].anchor, [100, 10]) < 0.4, "first path follows the other curve");
+assert.ok(dist(overA[0].anchor, [0, 0]) < 0.05, "the rest of the first path stays");
+assert.ok(dist(overB[0].anchor, [90, 0]) < 0.4, "second path follows the other curve");
+assert.ok(dist(overB[overB.length - 1].anchor, [100, 40]) < 0.05, "the rest of the second path stays");
+
+var kappa = 0.5522847498 * 100;
+var arc = { closed: false, verts: [V(0, -40), V(0, 0)] };
+var bow = {
+    closed: false,
+    verts: [V(0, 0, [0, 0], [kappa, 0]), V(100, 100, [100, 100 - kappa], [100, 100])]
+};
+var bowed = ctx.planOverlap([arc, bow], 20);
+var ontoBow = strokeOf(bowed, 0);
+var landed = ontoBow[ontoBow.length - 1].anchor;
+assert.ok(landed[0] > 15 && landed[0] < 25, "overlap follows the curve, x " + landed[0]);
+assert.ok(landed[1] > 0.5 && landed[1] < 6, "overlap is not the chord, y " + landed[1]);
+assert.ok(dist(ontoBow[0].anchor, [0, -40]) < 0.05);
+assert.ok(dist(strokeOf(bowed, 1)[strokeOf(bowed, 1).length - 1].anchor, [100, 100]) < 0.05);
+
+var shortOver = ctx.planOverlap([
+    { closed: false, verts: [V(0, 0), V(30, 0)] },
+    { closed: false, verts: [V(30, 0), V(35, 0)] }
+], 20);
+assert.ok(dist(strokeOf(shortOver, 0)[strokeOf(shortOver, 0).length - 1].anchor, [35, 0]) < 0.05, "overlap stops at the other path");
+
+var chain = ctx.planOverlap([
+    { closed: false, verts: [V(0, 0), V(50, 0)] },
+    { closed: false, verts: [V(50, 0), V(100, 0)] },
+    { closed: false, verts: [V(100, 0), V(150, 0)] }
+], 10);
+assert.ok(dist(strokeOf(chain, 0)[strokeOf(chain, 0).length - 1].anchor, [60, 0]) < 0.4);
+assert.ok(dist(strokeOf(chain, 1)[0].anchor, [40, 0]) < 0.4);
+assert.ok(dist(strokeOf(chain, 1)[strokeOf(chain, 1).length - 1].anchor, [110, 0]) < 0.4);
+assert.ok(dist(strokeOf(chain, 2)[0].anchor, [90, 0]) < 0.4);
+
+assert.strictEqual(ctx.planOverlap([
+    { closed: false, verts: [V(0, 0), V(10, 0)] },
+    { closed: false, verts: [V(40, 0), V(50, 0)] }
+], 10).strokes.length, 0, "separate paths stay separate");
+
 console.log("pathcorners ok");

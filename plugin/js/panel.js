@@ -868,6 +868,21 @@ document.getElementById("add-cutover").addEventListener("click", function () {
         refreshColors(function () {});
     });
 });
+document.getElementById("add-overlap").addEventListener("click", function () {
+    var mm = numberValue("overlap", 0);
+    if (mm <= 0) {
+        setStatus("Overlap in mm angeben.");
+        return;
+    }
+    evalHost("addOverlap(" + mm + ")", function (msg) {
+        if (msg === "nodoc") setStatus("Kein Dokument offen.");
+        else if (msg === "nosel") setStatus("Zwei Pfade selektieren.");
+        else if (msg === "none") setStatus("Keine Beruehrung gefunden.");
+        else if (msg.indexOf("ok") === 0) setStatus("Overlap: " + msg.split(" ")[1] + " Pfade.");
+        else setStatus(msg);
+        refreshColors(function () {});
+    });
+});
 document.getElementById("split-inward").addEventListener("click", function () {
     evalHost("splitInward()", function (msg) {
         if (msg === "nodoc") setStatus("Kein Dokument offen.");
