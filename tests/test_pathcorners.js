@@ -321,4 +321,15 @@ assert.strictEqual(ctx.planOverlap([
     { closed: false, verts: [V(40, 0), V(50, 0)] }
 ], 10).strokes.length, 0, "separate paths stay separate");
 
+var looped = ctx.planCut([ring(square)], 10, false, 10);
+assert.strictEqual(looped.strokes.length, 1, "connected cut overs are one path");
+assert.strictEqual(looped.strokes[0].verts.closedPath, true);
+var loopEnd = null;
+looped.strokes[0].verts.forEach(function (vert) {
+    if (dist(vert.anchor, [110, 0]) < 0.05) loopEnd = vert;
+});
+assert.ok(loopEnd, "the cut over end is still there");
+assert.ok(dist(loopEnd.right, [120, 0]) < 0.2, "the loop leaves along the cut tangent");
+assert.strictEqual(loopEnd.role, "loop");
+
 console.log("pathcorners ok");

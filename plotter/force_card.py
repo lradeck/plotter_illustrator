@@ -346,7 +346,7 @@ def build_force_card(pen_force=20, force_min=FORCE_MIN, force_max=FORCE_MAX,
                      force_step=1, speed_min=10, speed_max=50, speed_step=10,
                      pass_min=1, pass_max=3, pass_step=1, travel=TRAVEL,
                      overcut=0, y_axis="force", steg=0, pen_speed=20,
-                     pen_holder="right", offset=0.35):
+                     pen_holder="right", offset=0.35, titles=True):
     forces = series(force_min, force_max, force_step)
     speeds = series(speed_min, speed_max, speed_step)
     pass_values = series(pass_min, pass_max, pass_step)
@@ -374,8 +374,9 @@ def build_force_card(pen_force=20, force_min=FORCE_MIN, force_max=FORCE_MAX,
         area_gap += 2.0 * overlap + 1.0 - (above + area_gap)
     stack_h = len(pass_values) * block_h + max(len(pass_values) - 1, 0) * area_gap
     title_gap = 2.0
+    title_h = AXIS_MM + title_gap if titles else 0
     total_w = left_pad + grid_w
-    total_h = stack_h + AXIS_MM + title_gap
+    total_h = stack_h + title_h
     margin = 12.0 + overlap
     page_w = max(PAGE_MM[0], total_w + 2 * margin)
     page_h = max(PAGE_MM[1], total_h + 2 * margin)
@@ -428,20 +429,21 @@ def build_force_card(pen_force=20, force_min=FORCE_MIN, force_max=FORCE_MAX,
         head_y = top_square_y + SQUARE_MM + label_clear + DIGIT_MM + 1.5
         for stroke in text_strokes(head, HEAD_MM, squares_x, head_y):
             pens.append(_pen(stroke, pen_force, pen_speed, travel, head, pen_holder))
-    across = "Speed" if y_axis == "force" else "Kraft"
-    down = "Kraft" if y_axis == "force" else "Speed"
-    across_w = text_width(across, AXIS_MM)
-    across_x = squares_x + (grid_w - across_w) / 2.0
-    across_y = base_y + stack_h + title_gap
-    for stroke in text_strokes(across, AXIS_MM, across_x, across_y):
-        pens.append(_pen(stroke, pen_force, pen_speed, travel, across, pen_holder))
-    down_gap = 0.8
-    down_h = len(down) * AXIS_MM + (len(down) - 1) * down_gap
-    down_bottom = base_y + (stack_h - down_h) / 2.0
-    for index, char in enumerate(down):
-        char_y = down_bottom + (len(down) - 1 - index) * (AXIS_MM + down_gap)
-        for stroke in text_strokes(char, AXIS_MM, origin_x, char_y):
-            pens.append(_pen(stroke, pen_force, pen_speed, travel, down, pen_holder))
+    if titles:
+        across = "Speed" if y_axis == "force" else "Kraft"
+        down = "Kraft" if y_axis == "force" else "Speed"
+        across_w = text_width(across, AXIS_MM)
+        across_x = squares_x + (grid_w - across_w) / 2.0
+        across_y = base_y + stack_h + title_gap
+        for stroke in text_strokes(across, AXIS_MM, across_x, across_y):
+            pens.append(_pen(stroke, pen_force, pen_speed, travel, across, pen_holder))
+        down_gap = 0.8
+        down_h = len(down) * AXIS_MM + (len(down) - 1) * down_gap
+        down_bottom = base_y + (stack_h - down_h) / 2.0
+        for index, char in enumerate(down):
+            char_y = down_bottom + (len(down) - 1 - index) * (AXIS_MM + down_gap)
+            for stroke in text_strokes(char, AXIS_MM, origin_x, char_y):
+                pens.append(_pen(stroke, pen_force, pen_speed, travel, down, pen_holder))
     return {
         "page_mm": [page_w, page_h],
         "origin_mm": [0, 0],

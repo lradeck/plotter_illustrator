@@ -10,6 +10,7 @@ colors.json
 configurations.json
 connection.json
 materials.yaml
+history.json
 
 # Jobs saved while fake_plotter.py is listening.
 captures/job_*.bin
@@ -23,3 +24,5 @@ Unbenannt.png
 Thumbs.db
 Desktop.ini
 *.log
+tests/boot.html
+tests/chrome-profile/

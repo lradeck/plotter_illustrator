@@ -1,20 +1,20 @@
 var WELD_PT = 2;
 
-function planCut(specs, extendPt, inward) {
+function planCut(specs, extendPt, inward, loopPt) {
     var strokes = [];
     var removeMap = {};
     var i, out, s, chain, grew, shares;
     if (!specs) return { strokes: strokes, remove: [] };
     for (i = 0; i < specs.length; i++) {
         if (!specs[i] || !specs[i].closed || !specs[i].verts || specs[i].verts.length < 2) continue;
-        out = cutVerts(specs[i].verts, true, extendPt, inward);
+        out = cutVerts(specs[i].verts, true, extendPt, inward, loopPt);
         for (s = 0; s < out.length; s++) strokes.push({ source: i, verts: out[s] });
         if (out.length) removeMap[i] = true;
     }
     var chains = weldChains(specs);
     for (i = 0; i < chains.length; i++) {
         chain = chains[i];
-        chain.strokes = cutVerts(chain.verts, chain.closed, extendPt, inward);
+        chain.strokes = cutVerts(chain.verts, chain.closed, extendPt, inward, loopPt);
         if (chain.strokes.length) markSources(removeMap, chain.sources);
     }
     grew = true;
@@ -60,7 +60,7 @@ function mapKeys(map) {
     return keys;
 }
 
-function cutVerts(verts, closed, extendPt, inward) {
+function cutVerts(verts, closed, extendPt, inward, loopPt) {
     var n = verts.length;
     if (n < 2) return [];
     var area = closed ? ringArea(verts) : 0;
@@ -91,7 +91,62 @@ function cutVerts(verts, closed, extendPt, inward) {
             for (h = 0; h < halves.length; h++) out.push(halves[h]);
         } else out.push(built);
     }
+    if (loopPt > 0 && !inward && out.length > 1) {
+        var joined = joinCutOvers(out, closed, loopPt);
+        if (joined && joined.length > 2) return [joined];
+    }
     return out;
+}
+
+function joinCutOvers(runs, closed, radius) {
+    var joined = [];
+    var i, run, prevRun, nextRun, k;
+    var count = runs.length;
+    var links = closed ? count : count - 1;
+    for (i = 0; i < count; i++) {
+        run = runs[i];
+        if (i < links) {
+            nextRun = runs[(i + 1) % count];
+            linkLoop(run[run.length - 2], run[run.length - 1], nextRun[0], nextRun[1], radius);
+        }
+        for (k = 0; k < run.length; k++) joined.push(run[k]);
+    }
+    if (closed && joined.length > 2) {
+        joined.closedPath = true;
+        joined.loopIndexes = [];
+        for (i = 0; i < joined.length; i++) {
+            if (joined[i].role === "loop") joined.loopIndexes.push(i);
+        }
+    } else if (joined.length > 2) {
+        joined.loopIndexes = [];
+        for (i = 0; i < joined.length; i++) {
+            if (joined[i].role === "loop") joined.loopIndexes.push(i);
+        }
+    }
+    return joined;
+}
+
+function linkLoop(before, endVert, startVert, after, radius) {
+    var leave = unitOf(before.anchor, endVert.anchor);
+    var enter = unitOf(startVert.anchor, after.anchor);
+    var len = radius > 0.2 ? radius : 8;
+    if (!leave || !enter) return;
+    endVert.left = [endVert.anchor[0] - leave[0] * len, endVert.anchor[1] - leave[1] * len];
+    endVert.right = [endVert.anchor[0] + leave[0] * len, endVert.anchor[1] + leave[1] * len];
+    endVert.corner = false;
+    endVert.role = "loop";
+    startVert.left = [startVert.anchor[0] - enter[0] * len, startVert.anchor[1] - enter[1] * len];
+    startVert.right = [startVert.anchor[0] + enter[0] * len, startVert.anchor[1] + enter[1] * len];
+    startVert.corner = false;
+    startVert.role = "loop";
+}
+
+function unitOf(from, to) {
+    var dx = to[0] - from[0];
+    var dy = to[1] - from[1];
+    var len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 0.01) return null;
+    return [dx / len, dy / len];
 }
 
 function ringArea(verts) {

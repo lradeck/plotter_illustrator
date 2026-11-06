@@ -53,8 +53,8 @@ def encode_job(paths, page_mm, origin_mm=(0, 0), accurate=True,
             page_w, page_h, page_w, page_h, origin_x, origin_y
         )
     ]
+    holder = None
     for path in paths:
-        parts.append(_tool_prefix(path))
         points = [(units(x), units(y)) for x, y in path["points_mm"]]
         knife = accurate and path.get("mode", "cut") == "cut"
         offset = path.get("blade_offset_mm", None)
@@ -66,12 +66,21 @@ def encode_job(paths, page_mm, origin_mm=(0, 0), accurate=True,
         passes = int(path.get("passes", 1))
         if passes < 1:
             raise ValueError("passes must be at least 1")
-        parts.append(_moves(
+        resume = bool(path.get("resume")) and path.get("stay_down") is True and holder == path.get("holder")
+        if resume:
+            parts.append("FS%d;VS%d;" % (_lap_forces(path, passes)[0], int(path["cut_speed"])))
+        else:
+            parts.append(_tool_prefix(path))
+        holder = path.get("holder")
+        parts.append(_decorate(path, _moves(
             points, radius, overcut, turn,
             closed=path.get("closed", True),
             passes=passes,
             alternate=alternate and path.get("mode", "cut") == "cut",
-        ))
+            stay_down=path.get("stay_down", None),
+            resume=resume,
+            handoff=bool(path.get("handoff")),
+        )))
     parts.append("U0,0 @ ")
     return "".join(parts)
 
@@ -80,23 +89,40 @@ def _tool_prefix(path):
     holder = path.get("holder", "left")
     if holder not in HOLDERS:
         raise ValueError("holder must be left or right, got %r" % holder)
+    passes = int(path.get("passes", 1))
+    if passes < 1:
+        passes = 1
     return "%sFS%d;VS%d;US%d;" % (
         HOLDERS[holder],
-        int(path["force"]),
+        _lap_forces(path, passes)[0],
         int(path["cut_speed"]),
         int(path["travel_speed"]),
     )
 
 
-def _moves(points, radius, overcut, turn, closed=True, passes=1, alternate=False):
+def _moves(points, radius, overcut, turn, closed=True, passes=1, alternate=False, stay_down=None, resume=False, handoff=False):
     if len(points) < 2:
         raise ValueError("a path needs at least two points")
     if not closed:
         # A straight stroke has no corner, so the knife is not swung.
-        # Every pass starts with the knife up. Without alternating, every
-        # pass runs the same direction. With it, even passes start at the
-        # other end. The knife never travels back while it is down.
+        # Every pass starts with the knife up, unless the material says the
+        # passes stay down on a continuous path. Alternating still starts
+        # even passes at the other end and lifts between them.
         commands = []
+        if stay_down is not None and not alternate:
+            begun = False
+            if not resume:
+                commands.append("U%d,%d" % points[0])
+                begun = True
+            for lap in range(passes):
+                if lap:
+                    commands.append("LAP")
+                for point in points:
+                    if not begun:
+                        begun = True
+                        continue
+                    commands.append("D%d,%d" % point)
+            return " ".join(commands) + " "
         for lap in range(passes):
             stroke = list(reversed(points)) if alternate and lap % 2 == 1 else points
             commands.append("U%d,%d" % stroke[0])
@@ -105,10 +131,10 @@ def _moves(points, radius, overcut, turn, closed=True, passes=1, alternate=False
         return " ".join(commands) + " "
     if alternate:
         return _alternate_closed(points, radius, overcut, turn, passes)
-    return _camera_closed(points, radius, overcut, turn, passes)
+    return _camera_closed(points, radius, overcut, turn, passes, resume=resume, handoff=handoff)
 
 
-def _camera_closed(points, radius, overcut, turn, passes):
+def _camera_closed(points, radius, overcut, turn, passes, resume=False, handoff=False):
     """One tick, then every lap in a single pen-down.
 
     CameraCut keeps the knife down through the corner arcs. It plunges one
@@ -131,20 +157,30 @@ def _camera_closed(points, radius, overcut, turn, passes):
         seam = junction
     finish = _extend(seam, far, overcut) if overcut > 0 else seam
     commands = []
-    if turn > 0:
+    if turn > 0 and not resume:
         commands.extend(_orient_cut(junction, far, radius, turn))
     path = [plunge]
     ring = outline[:-1]
-    for _lap in range(passes):
+    boundaries = []
+    for lap in range(passes):
+        if lap:
+            boundaries.append(len(path))
         path.extend(ring[1:])
         path.append(ring[0])
-    if seam != path[-1]:
-        path.append(seam)
-    if finish != path[-1]:
-        path.append(finish)
-    commands.append("U%d,%d" % path[0])
+    if not handoff:
+        if seam != path[-1]:
+            path.append(seam)
+        if finish != path[-1]:
+            path.append(finish)
+    if not resume:
+        commands.append("U%d,%d" % path[0])
     previous = None
-    for point in path:
+    boundary_at = {}
+    for index in boundaries:
+        boundary_at[index] = True
+    for index, point in enumerate(path):
+        if index in boundary_at:
+            commands.append("LAP")
         if point == previous:
             continue
         commands.append("D%d,%d" % point)
@@ -292,6 +328,447 @@ def _unit(dx, dy):
     if length < 1e-6:
         return None
     return (dx / length, dy / length)
+
+
+def speed_at(points, query, cut_speed, boost, detail_deg=25, ramp_mm=8, closed=True):
+    """Speed in mm/s at a point on the path.
+
+    Straight stretches use `boost`. Within `ramp_mm` of a corner or a tight
+    bend the speed eases down to `cut_speed` and back up afterwards.
+    """
+    cut_speed = float(cut_speed)
+    if not boost or float(boost) <= cut_speed or len(points) < 3:
+        return cut_speed
+    boost = float(boost)
+    detail_deg = float(detail_deg or 25)
+    ramp_mm = max(float(ramp_mm or 0), 0.0)
+    located = _locate(points, query, closed)
+    if located is None:
+        return cut_speed
+    dist = _detail_distance(points, located[0], detail_deg, closed)
+    if ramp_mm <= 0 or dist >= ramp_mm:
+        return boost if dist > 0 else cut_speed
+    if dist <= 0:
+        return cut_speed
+    t = dist / ramp_mm
+    smooth = t * t * (3.0 - 2.0 * t)
+    return cut_speed + (boost - cut_speed) * smooth
+
+
+def detail_flags(points, detail_deg=25, closed=True):
+    count = len(points)
+    flags = [False] * count
+    if count < 3:
+        return flags
+    limit = float(detail_deg or 25)
+    turns = []
+    span = count if closed else count - 2
+    for index in range(count):
+        if not closed and (index == 0 or index == count - 1):
+            turns.append(0.0)
+            continue
+        prev = points[(index - 1) % count]
+        nxt = points[(index + 1) % count]
+        turns.append(_turn_deg(prev, points[index], nxt))
+        if turns[-1] >= limit:
+            flags[index] = True
+    lengths = _segment_lengths(points, closed)
+    window = 5.0
+    for index in range(count):
+        if not closed and (index == 0 or index == count - 1):
+            continue
+        total = 0.0
+        walked = 0.0
+        cursor = index
+        while walked < window and cursor < len(lengths):
+            total += turns[cursor]
+            step = lengths[cursor]
+            if step <= 0:
+                break
+            walked += step
+            cursor = (cursor + 1) % count if closed else cursor + 1
+            if cursor >= count or cursor == index:
+                break
+        if total >= limit:
+            flags[index] = True
+    return flags
+
+
+def fine_spans(points, detail_deg=25, ramp_mm=8, closed=True, loop=None):
+    """Pink pieces for the simulate view.
+
+    A fine spot is a vertex that turns at least `detail_deg`, counting the
+    bend on both sides, or a point on a cut-over loop. Straight runs keep
+    their color. Only the `ramp_mm` next to a fine spot is marked, so both
+    cut-over legs show and a long side does not.
+    """
+    count = len(points)
+    if count < 2:
+        return []
+    flags = _fine_points(points, detail_deg, closed, loop)
+    ramp = max(float(ramp_mm or 0), 0.0)
+    limit = count if closed else count - 1
+    spans = []
+    for index in range(limit):
+        end = (index + 1) % count
+        ax, ay = points[index]
+        bx, by = points[end]
+        dx = bx - ax
+        dy = by - ay
+        length = math.hypot(dx, dy)
+        if length < 1e-9:
+            continue
+        start_fine = flags[index]
+        end_fine = flags[end]
+        if not start_fine and not end_fine:
+            continue
+        ux = dx / length
+        uy = dy / length
+        if start_fine and end_fine and length <= max(ramp, 0.0) * 2.0:
+            spans.append([[ax, ay], [bx, by]])
+            continue
+        if start_fine:
+            take = length if ramp <= 0 else min(length, ramp)
+            spans.append([[ax, ay], [ax + ux * take, ay + uy * take]])
+        if end_fine:
+            take = length if ramp <= 0 else min(length, ramp)
+            spans.append([[bx - ux * take, by - uy * take], [bx, by]])
+    return spans
+
+
+def _fine_points(points, detail_deg, closed, loop):
+    count = len(points)
+    flags = [False] * count
+    if count < 3:
+        return flags
+    limit = float(detail_deg or 25)
+    turns = []
+    for index in range(count):
+        if not closed and (index == 0 or index == count - 1):
+            turns.append(0.0)
+            continue
+        prev = points[(index - 1) % count]
+        nxt = points[(index + 1) % count]
+        turns.append(_turn_deg(prev, points[index], nxt))
+    lengths = _segment_lengths(points, closed)
+    for index in range(count):
+        on_loop = bool(loop and index < len(loop) and loop[index])
+        around = _turn_around(turns, lengths, index, 5.0, closed)
+        if on_loop or turns[index] >= limit or around >= limit:
+            flags[index] = True
+    return flags
+
+
+def _turn_around(turns, lengths, index, window, closed):
+    total = turns[index]
+    count = len(turns)
+    for sign in (-1, 1):
+        walked = 0.0
+        cursor = index
+        guard = 0
+        while walked < window and guard < count:
+            guard += 1
+            if sign > 0:
+                if not closed and cursor >= len(lengths):
+                    break
+                step = lengths[cursor]
+                nxt = cursor + 1
+            else:
+                prev = cursor - 1
+                if not closed and prev < 0:
+                    break
+                step = lengths[prev]
+                nxt = prev
+            if step <= 0:
+                break
+            walked += step
+            if closed:
+                nxt %= count
+            if nxt == index or nxt < 0 or nxt >= count:
+                break
+            total += turns[nxt]
+            cursor = nxt
+    return total
+
+
+def force_on_segment(points, query, point_forces, closed=True):
+    """Loop force when the query sits on a segment whose ends share one."""
+    if not point_forces or len(point_forces) != len(points):
+        return None
+    located = _locate(points, query, closed)
+    if located is None:
+        return None
+    index = located[1]
+    end = (index + 1) % len(points)
+    if not closed and index >= len(points) - 1:
+        return None
+    start_force = point_forces[index]
+    end_force = point_forces[end]
+    if start_force is None or end_force is None:
+        return None
+    if int(round(float(start_force))) != int(round(float(end_force))):
+        return None
+    return int(round(float(start_force)))
+
+
+def preview_strokes(paths):
+    """Drawing-order samples for the simulate view."""
+    ordered = sorted(paths, key=lambda path: path.get("order", 0))
+    strokes = []
+    for path in ordered:
+        points = path.get("points_mm") or []
+        if len(points) < 2:
+            continue
+        try:
+            strokes.append(_preview_stroke(path, points))
+        except Exception as exc:
+            strokes.append({
+                "points": points,
+                "speeds": [path.get("cut_speed", path.get("speed", 20))] * len(points),
+                "forces": [int(path.get("force", 20))] * len(points),
+                "detail": [False] * len(points),
+                "detail_spans": [],
+                "ramp": path.get("ramp_mm", 8),
+                "closed": bool(path.get("closed", True)),
+                "passes": int(path.get("passes", 1) or 1),
+                "mode": path.get("mode", "cut"),
+                "layer": path.get("layer", ""),
+                "order": path.get("order", 0),
+                "error": str(exc),
+            })
+    return strokes
+
+
+def _preview_stroke(path, points):
+    closed = bool(path.get("closed", True))
+    cut = path.get("cut_speed", path.get("speed", 20))
+    detail = path.get("detail_deg", 25)
+    ramp = path.get("ramp_mm", 8)
+    boost = path.get("boost_speed")
+    flags = detail_flags(points, detail, closed)
+    point_forces = path.get("point_forces")
+    loop = []
+    if point_forces:
+        for index in range(len(points)):
+            loop.append(index < len(point_forces) and point_forces[index] is not None)
+    speeds = []
+    forces = []
+    for index, point in enumerate(points):
+        speeds.append(round(speed_at(
+            points, point, cut, boost, detail, ramp, closed
+        ), 2))
+        special = None
+        if point_forces and index < len(point_forces):
+            special = point_forces[index]
+        forces.append(int(special if special is not None else path.get("force", 20)))
+    return {
+        "points": points,
+        "speeds": speeds,
+        "forces": forces,
+        "detail": flags,
+        "detail_spans": fine_spans(points, detail, ramp, closed, loop),
+        "ramp": ramp,
+        "closed": closed,
+        "passes": int(path.get("passes", 1)),
+        "mode": path.get("mode", "cut"),
+        "layer": path.get("layer", ""),
+        "order": path.get("order", 0),
+        "stay_down": path.get("stay_down", None),
+    }
+
+
+def _decorate(path, text):
+    boost = path.get("boost_speed")
+    point_forces = path.get("point_forces")
+    passes = int(path.get("passes", 1))
+    lap_forces = _lap_forces(path, passes)
+    varied = len(set(lap_forces)) > 1
+    if not boost and not point_forces and not varied:
+        return text.replace(" LAP ", " ")
+    src = path.get("points_mm") or []
+    closed = bool(path.get("closed", True))
+    cut = float(path.get("cut_speed", 20))
+    detail = path.get("detail_deg", 25)
+    ramp = path.get("ramp_mm", 8)
+    tokens = text.split()
+    out = []
+    speed_state = int(round(cut))
+    force_state = lap_forces[0]
+    lap = 0
+    down = False
+    down_len = 0.0
+    last = None
+    for token in tokens:
+        if token == "LAP":
+            if lap + 1 < len(lap_forces):
+                lap += 1
+            wanted = lap_forces[min(lap, len(lap_forces) - 1)]
+            if wanted != force_state:
+                force_state = wanted
+                out.append("FS%d;" % force_state)
+            continue
+        if len(token) < 4 or token[0] not in "UD":
+            out.append(token)
+            continue
+        kind = token[0]
+        xs, ys = token[1:].split(",")
+        x, y = int(xs), int(ys)
+        if kind == "U":
+            if down and down_len > 3.0 and lap + 1 < len(lap_forces):
+                lap += 1
+            down = False
+            down_len = 0.0
+            last = None
+            if lap_forces[min(lap, len(lap_forces) - 1)] != force_state:
+                force_state = lap_forces[min(lap, len(lap_forces) - 1)]
+                out.append("FS%d;" % force_state)
+        else:
+            # The plotter keeps the current speed until the next point.
+            # A long straight side is one move, so the fast middle never
+            # happens unless that move is split into samples. The knife stays
+            # down; the samples are still one path.
+            targets = [(x, y)]
+            if last is not None and boost and len(src) >= 2:
+                gap = math.hypot(x - last[0], y - last[1])
+                pieces = int(gap / (2.0 * UNITS_PER_MM))
+                if pieces > 1:
+                    targets = []
+                    for step in range(1, pieces + 1):
+                        portion = step / float(pieces)
+                        targets.append((
+                            int(round(last[0] + (x - last[0]) * portion)),
+                            int(round(last[1] + (y - last[1]) * portion)),
+                        ))
+                    if targets[-1] != (x, y):
+                        targets.append((x, y))
+            for tx, ty in targets:
+                if last is not None:
+                    down_len += math.hypot(tx - last[0], ty - last[1]) / float(UNITS_PER_MM)
+                last = (tx, ty)
+                down = True
+                mm = (tx / float(UNITS_PER_MM), ty / float(UNITS_PER_MM))
+                if boost and len(src) >= 2:
+                    spd = int(round(speed_at(src, mm, cut, boost, detail, ramp, closed)))
+                    if spd != speed_state:
+                        out.append("VS%d;" % spd)
+                        speed_state = spd
+                wanted = force_state
+                if point_forces:
+                    special = force_on_segment(src, mm, point_forces, closed)
+                    wanted = special if special is not None else lap_forces[min(lap, len(lap_forces) - 1)]
+                elif varied:
+                    wanted = lap_forces[min(lap, len(lap_forces) - 1)]
+                if wanted != force_state:
+                    force_state = wanted
+                    out.append("FS%d;" % force_state)
+                out.append("D%d,%d" % (tx, ty))
+            continue
+        out.append(token)
+    return " ".join(out) + " "
+
+
+def _lap_forces(path, passes):
+    raw = path.get("forces")
+    if isinstance(raw, (list, tuple)) and raw:
+        forces = [int(round(float(value))) for value in raw]
+    else:
+        forces = [int(round(float(path.get("force", 20))))]
+    if len(forces) < passes:
+        forces.extend([forces[-1]] * (passes - len(forces)))
+    return forces[:passes]
+
+
+def _detail_distance(points, arc_pos, detail_deg, closed):
+    flags = detail_flags(points, detail_deg, closed)
+    lengths = _segment_lengths(points, closed)
+    total = sum(lengths)
+    if total <= 0:
+        return 0.0
+    marks = []
+    walked = 0.0
+    for index, flag in enumerate(flags):
+        if flag:
+            marks.append(walked)
+        if index < len(lengths):
+            walked += lengths[index]
+    if not marks:
+        return total
+    best = total
+    for mark in marks:
+        if closed:
+            gap = abs(arc_pos - mark)
+            gap = min(gap, total - gap)
+        else:
+            gap = abs(arc_pos - mark)
+        if gap < best:
+            best = gap
+    return best
+
+
+def _locate(points, query, closed):
+    count = len(points)
+    if count < 2:
+        return None
+    limit = count if closed else count - 1
+    best = None
+    best_dist = None
+    best_arc = 0.0
+    walked = 0.0
+    for index in range(limit):
+        end = (index + 1) % count
+        ax, ay = points[index]
+        bx, by = points[end]
+        dx = bx - ax
+        dy = by - ay
+        length = math.hypot(dx, dy)
+        if length < 1e-9:
+            continue
+        t = ((query[0] - ax) * dx + (query[1] - ay) * dy) / (length * length)
+        if t < 0:
+            t = 0.0
+        elif t > 1:
+            t = 1.0
+        px = ax + dx * t
+        py = ay + dy * t
+        dist = math.hypot(query[0] - px, query[1] - py)
+        if best_dist is None or dist < best_dist:
+            best_dist = dist
+            best = index
+            best_arc = walked + length * t
+        walked += length
+    if best is None:
+        return None
+    return (best_arc, best)
+
+
+def _segment_lengths(points, closed):
+    count = len(points)
+    limit = count if closed else count - 1
+    lengths = []
+    for index in range(limit):
+        end = (index + 1) % count
+        lengths.append(math.hypot(
+            points[end][0] - points[index][0],
+            points[end][1] - points[index][1],
+        ))
+    return lengths
+
+
+def _turn_deg(prev, here, nxt):
+    ax = here[0] - prev[0]
+    ay = here[1] - prev[1]
+    bx = nxt[0] - here[0]
+    by = nxt[1] - here[1]
+    la = math.hypot(ax, ay)
+    lb = math.hypot(bx, by)
+    if la < 1e-9 or lb < 1e-9:
+        return 0.0
+    cos = (ax * bx + ay * by) / (la * lb)
+    if cos > 1:
+        cos = 1
+    elif cos < -1:
+        cos = -1
+    return math.degrees(math.acos(cos))
 
 
 def parse_job(text):

@@ -9,7 +9,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "plotter"))
 
 from pattern import SPEEDS, FORCES, build_test_pattern, encode_test_pattern
-from protocol import encode_job, parse_job, units
+from protocol import encode_job, fine_spans, parse_job, preview_strokes, speed_at, units
 from send_job import job_from_document
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "square_knife.job")
@@ -493,6 +493,244 @@ def _side_key(segment):
     if abs(start[0] - end[0]) <= 2:
         return ("v", round(start[0] / 40.0))
     return ("h", round(start[1] / 40.0))
+
+
+class ProfileTest(unittest.TestCase):
+    def test_stay_down_follows_split_pieces_in_link_order(self):
+        first = _path("left", "cut", 12, 15, 40, [[0, 0], [10, 0]])
+        second = _path("left", "cut", 30, 80, 40, [[10, 0], [10, 10]])
+        for path in (first, second):
+            path["closed"] = False
+            path["stay_down"] = True
+            path["link_group"] = 1
+        first["link"] = 0
+        second["link"] = 1
+        text = job_from_document({
+            "paths": [second, first],
+            "page_mm": [50, 50],
+            "anchor": "top-left",
+            "accurate": False,
+            "turn_knife_mm": 0,
+            "blade_offset_mm": 0,
+        })
+        ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
+        self.assertEqual(len(ups), 2)
+        self.assertEqual(ups[0], (str(units(-10)), "0"))
+        self.assertIn("FS12;", text)
+        self.assertIn("FS30;", text)
+        self.assertIn("VS15;", text)
+        self.assertIn("VS80;", text)
+
+    def test_stay_down_joins_squares_that_share_a_corner(self):
+        left = _path("left", "cut", 20, 10, 30, [[0, 0], [10, 0], [10, 10], [0, 10]])
+        right = _path("left", "cut", 20, 10, 30, [[10, 0], [20, 0], [20, -10], [10, -10]])
+        left["stay_down"] = True
+        right["stay_down"] = True
+        left["closed"] = True
+        right["closed"] = True
+        text = job_from_document({
+            "paths": [left, right],
+            "page_mm": [50, 50],
+            "anchor": "top-left",
+            "accurate": False,
+            "turn_knife_mm": 0,
+            "blade_offset_mm": 0,
+        })
+        ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
+        self.assertEqual(len(ups), 2)
+        self.assertEqual(ups[0], (str(-units(10)), str(-units(10))))
+
+    def test_split_loop_repeats_the_whole_outline(self):
+        ring = [
+            [[0, 0], [10, 0]],
+            [[10, 0], [10, 10]],
+            [[10, 10], [0, 10]],
+            [[0, 10], [0, 0]],
+        ]
+        paths = []
+        for index, points in enumerate(ring):
+            path = _path("left", "cut", 13, 10 if index % 2 == 0 else 1, 40, points)
+            path["closed"] = False
+            path["stay_down"] = True
+            path["passes"] = 4
+            path["link_group"] = 0
+            path["link"] = index
+            paths.append(path)
+        paths.reverse()
+        text = job_from_document({
+            "paths": paths,
+            "page_mm": [40, 40],
+            "anchor": "top-left",
+            "accurate": False,
+            "turn_knife_mm": 0,
+            "blade_offset_mm": 0,
+        })
+        ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
+        self.assertEqual(len(ups), 2)
+        self.assertEqual(ups[0], (str(units(-10)), "0"))
+        self.assertEqual(text.count("VS1;"), 8)
+        self.assertGreaterEqual(text.count("VS10;"), 8)
+
+    def test_separate_paths_still_lift_when_stay_down_is_off(self):
+        first = _path("left", "cut", 20, 10, 30, [[0, 0], [10, 0]])
+        second = _path("left", "cut", 20, 10, 30, [[10, 0], [10, 10]])
+        first["closed"] = False
+        second["closed"] = False
+        first["stay_down"] = False
+        second["stay_down"] = False
+        text = job_from_document({
+            "paths": [first, second],
+            "page_mm": [50, 50],
+            "anchor": "top-left",
+            "accurate": False,
+            "turn_knife_mm": 0,
+            "blade_offset_mm": 0,
+        })
+        ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
+        self.assertEqual(len(ups), 3)
+
+    def test_open_passes_can_stay_down(self):
+        path = _path("left", "cut", 20, 10, 30, [[5, 5], [25, 5]])
+        path["passes"] = 3
+        path["closed"] = False
+        path["stay_down"] = True
+        text = encode_job([path], (100, 100), accurate=False, turn_knife_mm=0)
+        ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
+        self.assertEqual(ups.count(("200", "200")), 1)
+        self.assertEqual(len(ups), 2)
+
+    def test_closed_passes_stay_down_without_a_second_segment(self):
+        path = _path("left", "cut", 20, 10, 30, [[10, 10], [30, 10], [30, 30], [10, 30]])
+        path["passes"] = 2
+        path["stay_down"] = False
+        text = encode_job([path], (100, 100), accurate=False, turn_knife_mm=0)
+        ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
+        self.assertEqual(len(ups), 2)
+
+    def test_lift_mode_keeps_the_loop_order_and_lifts_between_pieces(self):
+        ring = [
+            [[0, 0], [10, 0]],
+            [[10, 0], [10, 10]],
+            [[10, 10], [0, 10]],
+            [[0, 10], [0, 0]],
+        ]
+        paths = []
+        for index, points in enumerate(ring):
+            path = _path("left", "cut", 14 if index % 2 == 0 else 1, 5 if index % 2 == 0 else 1, 40, points)
+            path["closed"] = False
+            path["stay_down"] = False
+            path["passes"] = 4
+            path["link_group"] = 0
+            path["link"] = index
+            paths.append(path)
+        paths.reverse()
+        text = job_from_document({
+            "paths": paths,
+            "page_mm": [40, 40],
+            "anchor": "top-left",
+            "accurate": False,
+            "turn_knife_mm": 0,
+            "blade_offset_mm": 0,
+        })
+        ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
+        self.assertEqual(len(ups), 17)
+        self.assertEqual(ups[0], (str(units(-10)), "0"))
+        self.assertEqual(ups[1], (str(units(-10)), str(units(-10))))
+        self.assertEqual(text.count("FS1;"), 8)
+        self.assertGreaterEqual(text.count("FS14;"), 8)
+        self.assertIsNone(re.search(r"FS1;VS1;D", text))
+
+    def test_each_pass_can_use_its_own_force(self):
+        path = _path("left", "cut", 10, 10, 30, [[0, 0], [20, 0]])
+        path["passes"] = 2
+        path["closed"] = False
+        path["stay_down"] = True
+        path["forces"] = [10, 40]
+        text = encode_job([path], (100, 100), accurate=False, turn_knife_mm=0)
+        self.assertIn("FS10;", text)
+        self.assertIn("FS40;", text)
+
+    def test_boost_slows_down_before_a_corner(self):
+        square = [[0, 0], [100, 0], [100, 100], [0, 100]]
+        mid = speed_at(square, (50, 0), 20, 200, 25, 8, True)
+        near = speed_at(square, (2, 0), 20, 200, 25, 8, True)
+        after = speed_at(square, (100, 2), 20, 200, 25, 8, True)
+        self.assertGreater(mid, 150)
+        self.assertLess(near, mid)
+        self.assertLess(after, mid)
+        path = _path("left", "cut", 20, 20, 30, square)
+        path["closed"] = True
+        path["passes"] = 1
+        path["boost_speed"] = 200
+        path["detail_deg"] = 25
+        path["ramp_mm"] = 8
+        text = encode_job([path], (200, 200), accurate=False, turn_knife_mm=0)
+        self.assertGreaterEqual(text.count("VS"), 2)
+        self.assertIn("VS", text.split("D", 1)[1])
+
+    def test_fine_area_marks_both_cutover_legs(self):
+        points = [(-30, 0), (-6, 0), (0, 0), (-6, 1), (-30, 1)]
+        spans = fine_spans(points, 20, 8, False)
+        self.assertTrue(self._span(spans, (-6, 0), (0, 0)))
+        self.assertTrue(self._span(spans, (0, 0), (-6, 1)))
+        self.assertFalse(self._span(spans, (-30, 0), (-6, 0)))
+
+    def _span(self, spans, start, end):
+        for span in spans:
+            if self._near(span[0], start) and self._near(span[1], end):
+                return True
+            if self._near(span[0], end) and self._near(span[1], start):
+                return True
+        return False
+
+    def _near(self, point, target):
+        return abs(point[0] - target[0]) < 0.2 and abs(point[1] - target[1]) < 0.2
+
+    def test_loop_segment_uses_the_loop_force(self):
+        points = [[0, 0], [10, 0], [14, 4], [10, 8]]
+        path = _path("left", "cut", 20, 10, 30, points)
+        path["closed"] = False
+        path["passes"] = 1
+        path["point_forces"] = [None, 20, 5, 5]
+        text = encode_job([path], (100, 100), accurate=False, turn_knife_mm=0)
+        self.assertIn("FS5;", text)
+
+    def test_preview_open_segments_keep_their_points(self):
+        bend = [[i * 3.0, 0.0 if i < 8 else (i - 8) * 2.0] for i in range(17)]
+        strokes = preview_strokes([
+            {"points_mm": [[0, 0], [40, 0]], "closed": False, "cut_speed": 80, "force": 20, "order": 0},
+            {"points_mm": bend, "closed": False, "cut_speed": 20, "force": 12, "order": 1},
+            {"points_mm": [[0, 0], [10, 0], [10, 10], [0, 10]], "closed": True, "cut_speed": 30, "force": 15, "order": 2},
+            {"points_mm": [[0, 0], [0, 0], [5, 0]], "closed": False, "cut_speed": 20, "force": 10, "order": 3},
+        ])
+        self.assertEqual(len(strokes), 4)
+        self.assertEqual(len(strokes[1]["speeds"]), 17)
+        self.assertNotIn("error", strokes[1])
+        self.assertEqual(strokes[0]["closed"], False)
+
+    def test_preview_command_matches_the_panel(self):
+        import subprocess
+        import tempfile
+        bend = [[i * 3.0, 0.0 if i < 8 else (i - 8) * 2.0] for i in range(17)]
+        job = {"paths": [
+            {"points_mm": [[0, 0], [40, 0]], "closed": False, "cut_speed": 80, "force": 20, "travel_speed": 200, "order": 0},
+            {"points_mm": bend, "closed": False, "cut_speed": 20, "force": 12, "travel_speed": 200, "order": 1},
+        ]}
+        folder = tempfile.mkdtemp()
+        src = os.path.join(folder, "job.json")
+        out = os.path.join(folder, "preview.json")
+        with open(src, "w") as handle:
+            json.dump(job, handle)
+        script = os.path.join(os.path.dirname(__file__), "..", "plotter", "send_job.py")
+        proc = subprocess.run(
+            [sys.executable, script, src, "--preview-out", out],
+            capture_output=True, text=True
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        with open(out, "r") as handle:
+            preview = json.load(handle)
+        self.assertEqual(len(preview["strokes"]), 2)
+        self.assertEqual(len(preview["strokes"][1]["points"]), 17)
 
 
 if __name__ == "__main__":
