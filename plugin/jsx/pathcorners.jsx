@@ -1,20 +1,20 @@
 var WELD_PT = 2;
 
-function planCut(specs, extendPt, inward, loopPt) {
+function planCut(specs, extendPt, inward, loopPt, gapPt) {
     var strokes = [];
     var removeMap = {};
     var i, out, s, chain, grew, shares;
     if (!specs) return { strokes: strokes, remove: [] };
     for (i = 0; i < specs.length; i++) {
         if (!specs[i] || !specs[i].closed || !specs[i].verts || specs[i].verts.length < 2) continue;
-        out = cutVerts(specs[i].verts, true, extendPt, inward, loopPt);
+        out = cutVerts(specs[i].verts, true, extendPt, inward, loopPt, gapPt);
         for (s = 0; s < out.length; s++) strokes.push({ source: i, verts: out[s] });
         if (out.length) removeMap[i] = true;
     }
     var chains = weldChains(specs);
     for (i = 0; i < chains.length; i++) {
         chain = chains[i];
-        chain.strokes = cutVerts(chain.verts, chain.closed, extendPt, inward, loopPt);
+        chain.strokes = cutVerts(chain.verts, chain.closed, extendPt, inward, loopPt, gapPt);
         if (chain.strokes.length) markSources(removeMap, chain.sources);
     }
     grew = true;
@@ -60,7 +60,7 @@ function mapKeys(map) {
     return keys;
 }
 
-function cutVerts(verts, closed, extendPt, inward, loopPt) {
+function cutVerts(verts, closed, extendPt, inward, loopPt, gapPt) {
     var n = verts.length;
     if (n < 2) return [];
     var area = closed ? ringArea(verts) : 0;
@@ -92,13 +92,13 @@ function cutVerts(verts, closed, extendPt, inward, loopPt) {
         } else out.push(built);
     }
     if (loopPt > 0 && !inward && out.length > 1) {
-        var joined = joinCutOvers(out, closed, loopPt);
+        var joined = joinCutOvers(out, closed, loopPt, gapPt);
         if (joined && joined.length > 2) return [joined];
     }
     return out;
 }
 
-function joinCutOvers(runs, closed, radius) {
+function joinCutOvers(runs, closed, radius, gap) {
     var joined = [];
     var i, run, prevRun, nextRun, k;
     var count = runs.length;
@@ -123,6 +123,7 @@ function joinCutOvers(runs, closed, radius) {
             if (joined[i].role === "loop") joined.loopIndexes.push(i);
         }
     }
+    if (gap > 0 && joined.length > 2) clearLoops(joined, joined.closedPath === true, gap);
     return joined;
 }
 
@@ -921,4 +922,223 @@ function ptDist2(a, b) {
     var dx = a[0] - b[0];
     var dy = a[1] - b[1];
     return dx * dx + dy * dy;
+}
+
+function isConnectorLoop(a, b) {
+    var drx = a.right[0] - a.anchor[0];
+    var dry = a.right[1] - a.anchor[1];
+    var dlx = b.left[0] - b.anchor[0];
+    var dly = b.left[1] - b.anchor[1];
+    var abx = b.anchor[0] - a.anchor[0];
+    var aby = b.anchor[1] - a.anchor[1];
+    var lenR = Math.sqrt(drx * drx + dry * dry);
+    var lenL = Math.sqrt(dlx * dlx + dly * dly);
+    if (lenR < 0.8 || lenL < 0.8) return false;
+    return drx * abx + dry * aby < 0 && dlx * -abx + dly * -aby < 0;
+}
+
+function clearLoops(verts, closed, gap, preset) {
+    var indexes = [];
+    var marked = {};
+    var n, count, i, j, lines, fit, key;
+    if (!verts || verts.length < 3 || !(gap > 0)) return indexes;
+    n = verts.length;
+    count = closed ? n : n - 1;
+    if (preset) {
+        for (key in preset) {
+            if (preset.hasOwnProperty(key) && preset[key]) marked[key] = true;
+        }
+    }
+    for (i = 0; i < count; i++) {
+        j = (i + 1) % n;
+        if (verts[i].role === "loop" && verts[j].role === "loop") marked[i] = true;
+        if (isConnectorLoop(verts[i], verts[j])) marked[i] = true;
+    }
+    for (i = 0; i < count; i++) {
+        if (!marked[i]) continue;
+        j = (i + 1) % n;
+        lines = loopObstacles(verts, closed, i, marked);
+        fit = placeLoop(verts[(i - 1 + n) % n], verts[i], verts[j], verts[(j + 1) % n], lines, gap);
+        if (!fit) continue;
+        verts[i].anchor = fit.a;
+        verts[i].left = [fit.a[0], fit.a[1]];
+        verts[i].right = fit.right;
+        verts[i].role = "loop";
+        verts[i].corner = false;
+        verts[j].anchor = fit.b;
+        verts[j].right = [fit.b[0], fit.b[1]];
+        verts[j].left = fit.left;
+        verts[j].role = "loop";
+        verts[j].corner = false;
+        indexes.push(i);
+    }
+    return indexes;
+}
+
+function loopObstacles(verts, closed, loopAt, marked) {
+    var n = verts.length;
+    var count = closed ? n : n - 1;
+    var skip = {};
+    var lines = [];
+    var i, j;
+    skip[loopAt] = true;
+    skip[(loopAt - 1 + n) % n] = true;
+    skip[(loopAt + 1) % n] = true;
+    for (i = 0; i < count; i++) {
+        if (skip[i] || (marked && marked[i])) continue;
+        j = (i + 1) % n;
+        pushCurveLines(lines, verts[i], verts[j], 6);
+    }
+    return lines;
+}
+
+function pushCurveLines(lines, a, b, steps) {
+    var prev = a.anchor;
+    var i, t, pt;
+    for (i = 1; i <= steps; i++) {
+        t = i / steps;
+        pt = bezPoint(a.anchor, a.right, b.left, b.anchor, t);
+        lines.push([prev[0], prev[1], pt[0], pt[1]]);
+        prev = pt;
+    }
+}
+
+function placeLoop(prev, aVert, bVert, next, lines, gap) {
+    var A = retreatTip(aVert.anchor, prev.anchor, lines, gap);
+    var B = retreatTip(bVert.anchor, next.anchor, lines, gap);
+    var Ta = unitOf(prev.anchor, A);
+    var Tb = unitOf(B, next.anchor);
+    if (!Ta) Ta = unitOf(prev.anchor, aVert.anchor);
+    if (!Tb) Tb = unitOf(bVert.anchor, next.anchor);
+    if (!Ta || !Tb) return null;
+    return fitLoopBetween(A, Ta, B, Tb, lines, gap);
+}
+
+function fitLoopBetween(A, Ta, B, Tb, lines, gap) {
+    var outward, len, extra, sign, best, trial, i;
+    outward = unitOf([0, 0], [Ta[0] - Tb[0], Ta[1] - Tb[1]]);
+    if (!outward) outward = [-Ta[1], Ta[0]];
+    best = null;
+    for (i = 1; i <= 14; i++) {
+        len = i * gap;
+        for (extra = 0; extra <= 8; extra++) {
+            for (sign = 1; sign >= -1; sign -= 2) {
+                trial = gradeLoop(A, Ta, B, Tb, outward, len, extra * gap, sign, lines, gap);
+                if (!best || betterLoop(trial, best)) best = trial;
+                if (trial.hits === 0 && trial.clear >= gap) return trial;
+                if (extra === 0) break;
+            }
+        }
+    }
+    return best;
+}
+
+function betterLoop(trial, best) {
+    var trialOk = trial.hits === 0 && trial.clear >= trial.need;
+    var bestOk = best.hits === 0 && best.clear >= best.need;
+    if (trialOk !== bestOk) return trialOk;
+    if (trial.hits !== best.hits) return trial.hits < best.hits;
+    return trial.clear > best.clear;
+}
+
+function gradeLoop(A, Ta, B, Tb, outward, len, extra, sign, lines, gap) {
+    var right = [
+        A[0] + Ta[0] * len + outward[0] * extra * sign,
+        A[1] + Ta[1] * len + outward[1] * extra * sign
+    ];
+    var left = [
+        B[0] - Tb[0] * len + outward[0] * extra * sign,
+        B[1] - Tb[1] * len + outward[1] * extra * sign
+    ];
+    var samples = [];
+    var steps = 16;
+    var i, clear, hits;
+    for (i = 0; i <= steps; i++) samples.push(bezPoint(A, right, left, B, i / steps));
+    clear = loopClearance(samples, lines);
+    hits = loopHits(samples, lines);
+    return { a: A, b: B, right: right, left: left, clear: clear, hits: hits, need: gap };
+}
+
+function loopClearance(samples, lines) {
+    var best = 1e9;
+    var i, k, d;
+    for (i = 2; i < samples.length - 2; i++) {
+        for (k = 0; k < lines.length; k++) {
+            d = distToLine(samples[i], lines[k]);
+            if (d < best) best = d;
+        }
+    }
+    return best;
+}
+
+function loopHits(samples, lines) {
+    var hits = 0;
+    var i, k;
+    for (i = 0; i < samples.length - 1; i++) {
+        for (k = 0; k < lines.length; k++) {
+            if (segmentsCross(samples[i], samples[i + 1], lines[k])) hits++;
+        }
+    }
+    return hits;
+}
+
+function retreatTip(tip, toward, lines, gap) {
+    var dx = toward[0] - tip[0];
+    var dy = toward[1] - tip[1];
+    var span = Math.sqrt(dx * dx + dy * dy);
+    var lo, hi, mid, i, p;
+    if (span < 0.4) return [tip[0], tip[1]];
+    if (minPointDist(tip, lines) >= gap) return [tip[0], tip[1]];
+    lo = 0;
+    hi = 0.92;
+    for (i = 0; i < 12; i++) {
+        mid = (lo + hi) / 2;
+        p = [tip[0] + dx * mid, tip[1] + dy * mid];
+        if (minPointDist(p, lines) >= gap) hi = mid;
+        else lo = mid;
+    }
+    return [tip[0] + dx * hi, tip[1] + dy * hi];
+}
+
+function minPointDist(p, lines) {
+    var best = 1e9;
+    var i, d;
+    for (i = 0; i < lines.length; i++) {
+        d = distToLine(p, lines[i]);
+        if (d < best) best = d;
+    }
+    return best;
+}
+
+function distToLine(p, line) {
+    var dx = line[2] - line[0];
+    var dy = line[3] - line[1];
+    var len2 = dx * dx + dy * dy;
+    var t, x, y, ex, ey;
+    if (len2 < 1e-8) {
+        ex = p[0] - line[0];
+        ey = p[1] - line[1];
+        return Math.sqrt(ex * ex + ey * ey);
+    }
+    t = ((p[0] - line[0]) * dx + (p[1] - line[1]) * dy) / len2;
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    x = line[0] + dx * t;
+    y = line[1] + dy * t;
+    ex = p[0] - x;
+    ey = p[1] - y;
+    return Math.sqrt(ex * ex + ey * ey);
+}
+
+function segmentsCross(p, q, line) {
+    var r0 = q[0] - p[0];
+    var r1 = q[1] - p[1];
+    var s0 = line[2] - line[0];
+    var s1 = line[3] - line[1];
+    var den = r0 * s1 - r1 * s0;
+    var t, u;
+    if (Math.abs(den) < 1e-8) return false;
+    t = ((line[0] - p[0]) * s1 - (line[1] - p[1]) * s0) / den;
+    u = ((line[0] - p[0]) * r1 - (line[1] - p[1]) * r0) / den;
+    return t > 0.08 && t < 0.92 && u > 0.02 && u < 0.98;
 }

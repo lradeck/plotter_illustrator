@@ -332,4 +332,65 @@ assert.ok(loopEnd, "the cut over end is still there");
 assert.ok(dist(loopEnd.right, [120, 0]) < 0.2, "the loop leaves along the cut tangent");
 assert.strictEqual(loopEnd.role, "loop");
 
+var crowded = [[0, 0], [36, 0], [36, 8], [8, 8], [8, 28], [36, 28], [36, 36], [0, 36]];
+var crossed = ctx.planCut([ring(crowded)], 6, false, 14);
+var cleared = ctx.planCut([ring(crowded)], 6, false, 14, 4);
+function loopSamples(verts) {
+    var found = [];
+    var i, j, k, a, b, t, u, p;
+    for (i = 0; i < verts.length; i++) {
+        j = (i + 1) % verts.length;
+        if (verts[i].role !== "loop" || verts[j].role !== "loop") continue;
+        a = verts[i];
+        b = verts[j];
+        for (k = 1; k < 12; k++) {
+            t = k / 12;
+            u = 1 - t;
+            p = [
+                u * u * u * a.anchor[0] + 3 * u * u * t * a.right[0] + 3 * u * t * t * b.left[0] + t * t * t * b.anchor[0],
+                u * u * u * a.anchor[1] + 3 * u * u * t * a.right[1] + 3 * u * t * t * b.left[1] + t * t * t * b.anchor[1]
+            ];
+            found.push(p);
+        }
+    }
+    return found;
+}
+function formLines(verts) {
+    var lines = [];
+    var i, j;
+    for (i = 0; i < verts.length; i++) {
+        j = (i + 1) % verts.length;
+        if (verts[i].role === "loop" || verts[j].role === "loop") continue;
+        if (verts[i].role === "ext" || verts[j].role === "ext") continue;
+        lines.push([verts[i].anchor, verts[j].anchor]);
+    }
+    return lines;
+}
+function lineDist(p, a, b) {
+    var dx = b[0] - a[0];
+    var dy = b[1] - a[1];
+    var len2 = dx * dx + dy * dy;
+    var t;
+    if (len2 < 1e-8) return dist(p, a);
+    t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2;
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    return dist(p, [a[0] + dx * t, a[1] + dy * t]);
+}
+function minLoopGap(verts) {
+    var samples = loopSamples(verts);
+    var lines = formLines(verts);
+    var best = 1e9;
+    var i, k, d;
+    for (i = 0; i < samples.length; i++) {
+        for (k = 0; k < lines.length; k++) {
+            d = lineDist(samples[i], lines[k][0], lines[k][1]);
+            if (d < best) best = d;
+        }
+    }
+    return best;
+}
+assert.ok(crossed.strokes.length === 1, "crowded form still joins");
+assert.ok(minLoopGap(cleared.strokes[0].verts) + 0.05 >= 4, "loops stay 4 units off the form, gap " + minLoopGap(cleared.strokes[0].verts));
+
 console.log("pathcorners ok");

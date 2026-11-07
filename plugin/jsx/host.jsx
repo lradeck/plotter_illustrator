@@ -1040,6 +1040,7 @@ function splitForm(detailDeg) {
         var created = [];
         var detailCount = 0;
         var straightCount = 0;
+        var loopCount = 0;
         var i, made;
         for (i = 0; i < paths.length; i++) {
             if (!paths[i].pathPoints || paths[i].pathPoints.length < 2) continue;
@@ -1047,13 +1048,14 @@ function splitForm(detailDeg) {
             created = created.concat(made.created);
             detailCount += made.detail;
             straightCount += made.straight;
+            loopCount += made.loop;
             try { paths[i].remove(); } catch (eRem) {}
         }
         if (created.length) {
             try { app.activeDocument.selection = created; } catch (eSel) {}
         }
-        logLine("split deg " + limit + " made " + created.length + " detail " + detailCount + " straight " + straightCount);
-        return "ok " + created.length + " detail " + detailCount + " straight " + straightCount;
+        logLine("split deg " + limit + " made " + created.length + " detail " + detailCount + " straight " + straightCount + " loop " + loopCount);
+        return "ok " + created.length + " detail " + detailCount + " straight " + straightCount + " loop " + loopCount;
     } catch (err) {
         logLine("split ERR " + clean(err.message));
         return "ERR " + clean(err.message);
@@ -1066,7 +1068,7 @@ function previewSplit(detailDeg) {
         var limit = splitLimit(detailDeg);
         var paths = selectedPaths();
         var real = [];
-        var i, layer, made, count, detailCount, straightCount;
+        var i, layer, made, count, detailCount, straightCount, loopCount;
         for (i = 0; i < paths.length; i++) {
             if (paths[i].layer && paths[i].layer.name === "Detailgrad Vorschau") continue;
             real.push(paths[i]);
@@ -1078,12 +1080,14 @@ function previewSplit(detailDeg) {
         count = 0;
         detailCount = 0;
         straightCount = 0;
+        loopCount = 0;
         for (i = 0; i < real.length; i++) {
             if (!real[i].pathPoints || real[i].pathPoints.length < 2) continue;
             made = emitSegments(real[i], layer, limit, i, true);
             count += made.created.length;
             detailCount += made.detail;
             straightCount += made.straight;
+            loopCount += made.loop;
         }
         try { app.activeDocument.selection = real; } catch (eSel) {}
         app.redraw();
@@ -1114,10 +1118,20 @@ function splitLimit(detailDeg) {
 function emitSegments(source, container, limit, linkId, preview) {
     var verts = readVerts(source);
     var closed = source.closed === true;
-    var runs = segmentRuns(verts, closed, limit);
+    var loopSet = loopIndexSet(source.note);
+    var n = verts.length;
+    var count = closed ? n : n - 1;
+    var i, j;
+    for (i = 0; i < count; i++) {
+        j = (i + 1) % n;
+        if (typeof isConnectorLoop === "function" && isConnectorLoop(verts[i], verts[j])) loopSet[i] = true;
+    }
+    if (typeof clearLoops === "function") clearLoops(verts, closed, MM, loopSet);
+    var runs = segmentRuns(verts, closed, limit, loopSet);
     var created = [];
     var detailCount = 0;
     var straightCount = 0;
+    var loopCount = 0;
     var r, neu, piece, kind;
     for (r = 0; r < runs.length; r++) {
         kind = runs[r].kind;
@@ -1138,19 +1152,20 @@ function emitSegments(source, container, limit, linkId, preview) {
             neu.strokeWidth = neu.strokeWidth + 0.4;
         }
         created.push(neu);
-        if (kind === "detail") detailCount++;
+        if (kind === "loop") loopCount++;
+        else if (kind === "detail") detailCount++;
         else straightCount++;
     }
-    return { created: created, detail: detailCount, straight: straightCount };
+    return { created: created, detail: detailCount, straight: straightCount, loop: loopCount };
 }
 
-function segmentRuns(verts, closed, limit) {
+function segmentRuns(verts, closed, limit, loopSet) {
     var n = verts.length;
     var count = closed ? n : n - 1;
     var kinds = [];
     var i, runs, run, last;
     if (count < 1) return [];
-    for (i = 0; i < count; i++) kinds.push(segmentBend(verts[i], verts[(i + 1) % n]) >= limit ? "detail" : "straight");
+    for (i = 0; i < count; i++) kinds.push(segmentKind(verts, i, n, limit, loopSet));
     runs = [];
     run = { kind: kinds[0], from: 0, to: 0, wrap: false, whole: false };
     for (i = 1; i < count; i++) {
@@ -1194,6 +1209,14 @@ function runVerts(verts, run, closed) {
     return out;
 }
 
+function segmentKind(verts, i, n, limit, loopSet) {
+    var j = (i + 1) % n;
+    if (loopSet && loopSet[i]) return "loop";
+    if (typeof isConnectorLoop === "function" && isConnectorLoop(verts[i], verts[j])) return "loop";
+    if (segmentBend(verts[i], verts[j]) >= limit) return "detail";
+    return "straight";
+}
+
 function segmentBend(a, b) {
     var steps = 8;
     var pts = [];
@@ -1232,7 +1255,11 @@ function headingTurn(p0, p1, p2) {
 
 function paintSegment(path, kind) {
     var color = new RGBColor();
-    if (kind === "detail") {
+    if (kind === "loop") {
+        color.red = 70;
+        color.green = 70;
+        color.blue = 70;
+    } else if (kind === "detail") {
         color.red = 255;
         color.green = 106;
         color.blue = 213;
@@ -1353,6 +1380,7 @@ function editSelection(cutoverMm, inward, loopMm, loopForce) {
         var paths = selectedPaths();
         if (!paths.length) return "nosel";
         var loopPt = loopMm > 0 ? loopMm * MM : 0;
+        var gapPt = loopPt > 0 ? MM : 0;
         var specs = [];
         var i;
         for (i = 0; i < paths.length; i++) {
@@ -1367,7 +1395,7 @@ function editSelection(cutoverMm, inward, loopMm, loopForce) {
             }
             specs.push({ closed: paths[i].closed === true, verts: readVerts(paths[i]) });
         }
-        var plan = cut(specs, cutoverMm > 0 ? cutoverMm * MM : 0, inward, loopPt);
+        var plan = cut(specs, cutoverMm > 0 ? cutoverMm * MM : 0, inward, loopPt, gapPt);
         var made = 0;
         var created = [];
         var s, src, neu;
@@ -1453,7 +1481,7 @@ function loopNote(verts, force, closed) {
     var indexes = [];
     var i, n, j;
     n = verts.length;
-    if (n < 2 || !(parseFloat(force) > 0)) return "";
+    if (n < 2) return "";
     for (i = 0; i < n; i++) {
         j = i + 1;
         if (j === n) {
@@ -1464,7 +1492,7 @@ function loopNote(verts, force, closed) {
     }
     if (!indexes.length) return "";
     var level = parseInt(force, 10);
-    if (isNaN(level)) level = 0;
+    if (isNaN(level) || !(level > 0)) return "loops=" + indexes.join(",");
     return "LF" + level + ";loops=" + indexes.join(",");
 }
 
