@@ -998,6 +998,7 @@ function rememberJob(jobPath, host, port, count) {
             host: host,
             port: String(port),
             count: count,
+            duration_s: jobSeconds({ job: job }),
             job: job
         });
         if (plotJobs.length > 40) plotJobs = plotJobs.slice(0, 40);
@@ -1013,6 +1014,62 @@ function historyWhen(at) {
     var date = new Date(at);
     if (isNaN(date.getTime())) return "";
     return pad(date.getDate()) + "." + pad(date.getMonth() + 1) + "." + date.getFullYear() + " " + pad(date.getHours()) + ":" + pad(date.getMinutes());
+}
+
+function strokeLength(path) {
+    var pts = path.points_mm || [];
+    var total = 0;
+    var i, dx, dy;
+    for (i = 1; i < pts.length; i++) {
+        dx = pts[i][0] - pts[i - 1][0];
+        dy = pts[i][1] - pts[i - 1][1];
+        total += Math.sqrt(dx * dx + dy * dy);
+    }
+    if (path.closed && pts.length > 1) {
+        dx = pts[0][0] - pts[pts.length - 1][0];
+        dy = pts[0][1] - pts[pts.length - 1][1];
+        total += Math.sqrt(dx * dx + dy * dy);
+    }
+    return total;
+}
+
+function jobSeconds(entry) {
+    var paths = entry.job && entry.job.paths ? entry.job.paths.slice() : [];
+    var seconds = 0;
+    var last = null;
+    var i, path, passes, speed, travel, len, start, dx, dy;
+    paths.sort(function (a, b) { return (a.order || 0) - (b.order || 0); });
+    for (i = 0; i < paths.length; i++) {
+        path = paths[i];
+        if (!path.points_mm || path.points_mm.length < 2) continue;
+        len = strokeLength(path);
+        passes = parseInt(path.passes, 10);
+        if (isNaN(passes) || passes < 1) passes = 1;
+        speed = parseFloat(path.cut_speed);
+        if (speed > 0) seconds += (len * passes) / speed;
+        start = path.points_mm[0];
+        travel = parseFloat(path.travel_speed);
+        if (last && travel > 0) {
+            dx = start[0] - last[0];
+            dy = start[1] - last[1];
+            seconds += Math.sqrt(dx * dx + dy * dy) / travel;
+        }
+        last = path.closed ? path.points_mm[0] : path.points_mm[path.points_mm.length - 1];
+    }
+    return seconds > 0 ? seconds : null;
+}
+
+function historyDuration(entry) {
+    var seconds = entry.duration_s != null ? entry.duration_s : jobSeconds(entry);
+    var total, h, m, s;
+    if (!(seconds > 0)) return "";
+    total = Math.round(seconds);
+    s = total % 60;
+    m = Math.floor(total / 60) % 60;
+    h = Math.floor(total / 3600);
+    if (h > 0) return "ca. " + h + ":" + pad(m) + ":" + pad(s);
+    if (total >= 60) return "ca. " + Math.floor(total / 60) + ":" + pad(s);
+    return "ca. " + total + " s";
 }
 
 function renderHistory() {
@@ -1031,7 +1088,7 @@ function renderHistory() {
     for (i = 0; i < plotJobs.length; i++) {
         entry = plotJobs[i];
         item = document.createElement("li");
-        item.textContent = historyWhen(entry.at) + "  " + (entry.count || 0) + " Pfade" + (entry.note ? "  " + entry.note : "");
+        item.textContent = historyWhen(entry.at) + "  " + (entry.count || 0) + " Pfade" + (historyDuration(entry) ? "  " + historyDuration(entry) : "") + (entry.note ? "  " + entry.note : "");
         item.setAttribute("data-id", entry.id);
         if (entry.id === historyOpen) item.className = "selected";
         item.addEventListener("click", openHistory);
@@ -1046,7 +1103,9 @@ function findHistory(id) {
 }
 
 function jobText(entry) {
-    var lines = ["Host " + entry.host + ":" + entry.port, ""];
+    var lines = ["Host " + entry.host + ":" + entry.port];
+    if (historyDuration(entry)) lines.push("Dauer " + historyDuration(entry));
+    lines.push("");
     var paths = entry.job && entry.job.paths ? entry.job.paths : [];
     var i, path;
     for (i = 0; i < paths.length; i++) {
@@ -1060,7 +1119,7 @@ function openHistory(event) {
     var entry = findHistory(event.currentTarget.getAttribute("data-id"));
     if (!entry) return;
     historyOpen = entry.id;
-    document.getElementById("history-title").textContent = historyWhen(entry.at);
+    document.getElementById("history-title").textContent = historyWhen(entry.at) + (historyDuration(entry) ? "  " + historyDuration(entry) : "");
     document.getElementById("history-params").textContent = jobText(entry);
     document.getElementById("history-note").value = entry.note || "";
     openSheet("history-sheet");

@@ -21,7 +21,9 @@
                         rgb: [216, 87, 255],
                         blade_offset_mm: 0.4,
                         cut_depth: 7,
-                        stay_down: true
+                        stay_down: true,
+                        closed: true,
+                        points_mm: [[0, 0], [30, 0], [30, 40], [0, 40]]
                     }
                 ]
             }
@@ -45,7 +47,9 @@
                 passes: 1,
                 layer: "Left F9",
                 rgb: [1, 2, 3],
-                stay_down: true
+                stay_down: true,
+                closed: false,
+                points_mm: [[0, 0], [10, 0]]
             }
         ]
     });

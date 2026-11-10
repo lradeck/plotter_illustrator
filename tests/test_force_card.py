@@ -570,6 +570,8 @@ class ForceCardTest(unittest.TestCase):
         with open(panel_js, "r") as handle:
             script = handle.read()
         self.assertIn("var plotJobs", script)
+        self.assertIn("function historyDuration", script)
+        self.assertIn("function jobSeconds", script)
         self.assertNotIn("var history =", script)
         self.assertIn("new Option", script)
         self.assertIn("selectedIndex", script)

@@ -325,7 +325,7 @@ function preferNumber(primary, fallback) {
 }
 
 function segmentKind(note) {
-    var found = String(note || "").match(/seg=(detail|straight)/i);
+    var found = String(note || "").match(/seg=(detail|straight|loop)/i);
     return found ? String(found[1]).toLowerCase() : "";
 }
 
@@ -1165,7 +1165,7 @@ function segmentRuns(verts, closed, limit, loopSet) {
     var kinds = [];
     var i, runs, run, last;
     if (count < 1) return [];
-    for (i = 0; i < count; i++) kinds.push(segmentKind(verts, i, n, limit, loopSet));
+    for (i = 0; i < count; i++) kinds.push(classifySegment(verts, i, n, limit, loopSet));
     runs = [];
     run = { kind: kinds[0], from: 0, to: 0, wrap: false, whole: false };
     for (i = 1; i < count; i++) {
@@ -1209,7 +1209,7 @@ function runVerts(verts, run, closed) {
     return out;
 }
 
-function segmentKind(verts, i, n, limit, loopSet) {
+function classifySegment(verts, i, n, limit, loopSet) {
     var j = (i + 1) % n;
     if (loopSet && loopSet[i]) return "loop";
     if (typeof isConnectorLoop === "function" && isConnectorLoop(verts[i], verts[j])) return "loop";
