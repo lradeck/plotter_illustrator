@@ -30,8 +30,6 @@ var busy = false;
 var fieldsDirty = false;
 var plotJobs = [];
 var historyOpen = "";
-var simTimer = 0;
-var simPlay = null;
 var library = [];
 var configs = [];
 var colors = [];
@@ -1167,8 +1165,14 @@ function applyHistoryTemplate() {
 }
 
 var simData = null;
-var simFrame = 0;
-var simPlaying = false;
+var simSeg = 0;
+var simCommandStamp = "";
+var simZoom = 1;
+var simPanX = 0;
+var simPanY = 0;
+var simSpace = false;
+var simPanning = false;
+var simPanLast = null;
 
 function refreshSimulate() {
     var jobPath = tempPath("plotter_preview_job.json");
@@ -1190,7 +1194,8 @@ function refreshSimulate() {
                     return;
                 }
                 simData = JSON.parse(fs.readFileSync(previewPath, "utf8"));
-                if (!simPlaying) simFrame = 0;
+                simSeg = 0;
+                renderSimCommands(simData.sections);
                 drawSimulate();
                 var count = simData.strokes ? simData.strokes.length : 0;
                 if (!count) document.getElementById("sim-tip").textContent = "Keine Linie im Dokument.";
@@ -1202,11 +1207,109 @@ function refreshSimulate() {
     });
 }
 
-function simBounds(strokes) {
+function renderSimCommands(sections) {
+    var root = document.getElementById("sim-commands");
+    var i, k, n, section, part, block, summary, note, code, name, stamp, open;
+    if (!root) return;
+    stamp = JSON.stringify(sections || []);
+    if (stamp === simCommandStamp && root.firstChild) return;
+    open = {};
+    var nodes = root.querySelectorAll("details");
+    for (n = 0; n < nodes.length; n++) {
+        if (!nodes[n].open) continue;
+        name = nodes[n].querySelector("summary");
+        if (name) open[name.textContent] = true;
+    }
+    simCommandStamp = stamp;
+    while (root.firstChild) root.removeChild(root.firstChild);
+    if (!sections) return;
+    for (i = 0; i < sections.length; i++) {
+        section = sections[i];
+        block = document.createElement("details");
+        summary = document.createElement("summary");
+        summary.textContent = section.title || ("Part " + (i + 1));
+        if (open[summary.textContent]) block.open = true;
+        block.appendChild(summary);
+        part = section.parts || [];
+        for (k = 0; k < part.length; k++) {
+            note = document.createElement("p");
+            note.className = "sim-note";
+            note.textContent = part[k].note || "";
+            code = document.createElement("pre");
+            code.className = "sim-cmd";
+            code.textContent = part[k].commands || "";
+            block.appendChild(note);
+            block.appendChild(code);
+        }
+        root.appendChild(block);
+    }
+}
+
+function simTravelOn() {
+    var box = document.getElementById("sim-travel");
+    return !box || box.checked;
+}
+
+function simSteps() {
+    var all = simData && simData.segments ? simData.segments : [];
+    var showTravel = simTravelOn();
+    var steps = [];
+    var i, seg, pts;
+    for (i = 0; i < all.length; i++) {
+        seg = all[i];
+        pts = seg.points || [];
+        if (!pts.length) continue;
+        if (seg.kind === "travel") {
+            if (showTravel && pts.length >= 2) steps.push({ kind: "travel", points: pts });
+            continue;
+        }
+        steps.push({ kind: "down", points: [pts[0]] });
+        if (pts.length >= 2) steps.push({ kind: seg.kind, points: pts });
+        steps.push({ kind: "up", points: [pts[pts.length - 1]] });
+    }
+    return steps;
+}
+
+function simStepTitle(steps, index) {
+    var step = steps[index];
+    var nxt, after;
+    if (!step) return "";
+    if (step.kind === "down") return "Messer runter";
+    if (step.kind === "up") return "Messer hoch";
+    if (step.kind === "tick") return "1 mm schneiden";
+    if (step.kind === "cut") return "Pfad schneiden";
+    nxt = steps[index + 1];
+    if (!nxt) return "Fahrt zurueck zum Start";
+    if (nxt.kind === "down") {
+        after = steps[index + 2];
+        if (after && after.kind === "tick") return "Fahrt zum 1-mm-Ansatz";
+        return "Fahrt zum Schnitt";
+    }
+    return "Fahrt";
+}
+
+function simSetTip(steps) {
+    var el = document.getElementById("sim-tip");
+    var title;
+    if (!el) return;
+    if (!steps.length) {
+        el.textContent = "Keine Linie im Dokument.";
+        return;
+    }
+    if (simSeg <= 0) {
+        el.textContent = "Vor: " + simStepTitle(steps, 0);
+        return;
+    }
+    title = simSeg + "/" + steps.length + " " + simStepTitle(steps, simSeg - 1);
+    if (simSeg < steps.length) title += "   ·   Vor: " + simStepTitle(steps, simSeg);
+    el.textContent = title;
+}
+
+function simBounds(segments) {
     var minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9, i, j, p;
-    for (i = 0; i < strokes.length; i++) {
-        for (j = 0; j < strokes[i].points.length; j++) {
-            p = strokes[i].points[j];
+    for (i = 0; i < segments.length; i++) {
+        for (j = 0; j < segments[i].points.length; j++) {
+            p = segments[i].points[j];
             if (p[0] < minX) minX = p[0];
             if (p[1] < minY) minY = p[1];
             if (p[0] > maxX) maxX = p[0];
@@ -1222,11 +1325,37 @@ function simProject(bounds, point, width, height) {
     var pad = 16;
     var sx = (width - pad * 2) / (bounds.maxX - bounds.minX);
     var sy = (height - pad * 2) / (bounds.maxY - bounds.minY);
-    var scale = Math.min(sx, sy);
+    var fit = Math.min(sx, sy);
+    var cx = width / 2;
+    var cy = height / 2;
+    var x = pad + (point[0] - bounds.minX) * fit;
+    var y = height - pad - (point[1] - bounds.minY) * fit;
     return [
-        pad + (point[0] - bounds.minX) * scale,
-        height - pad - (point[1] - bounds.minY) * scale
+        cx + (x - cx) * simZoom + simPanX,
+        cy + (y - cy) * simZoom + simPanY
     ];
+}
+
+function simResetView() {
+    simZoom = 1;
+    simPanX = 0;
+    simPanY = 0;
+    drawSimulate();
+}
+
+function simZoomAt(canvasX, canvasY, factor) {
+    var canvas = document.getElementById("sim-canvas");
+    var next = simZoom * factor;
+    var cx, cy, baseX, baseY;
+    if (next < 0.4) next = 0.4;
+    if (next > 24) next = 24;
+    cx = canvas.width / 2;
+    cy = canvas.height / 2;
+    baseX = cx + (canvasX - simPanX - cx) / simZoom;
+    baseY = cy + (canvasY - simPanY - cy) / simZoom;
+    simPanX = canvasX - cx - (baseX - cx) * next;
+    simPanY = canvasY - cy - (baseY - cy) * next;
+    simZoom = next;
 }
 
 function speedColor(speed, slow, fast) {
@@ -1241,131 +1370,173 @@ function speedColor(speed, slow, fast) {
 
 function drawSimulate() {
     var canvas = document.getElementById("sim-canvas");
-    if (!canvas || !simData || !simData.strokes) return;
+    var steps = simSteps();
+    if (!canvas || !simData) return;
     var ctx = canvas.getContext("2d");
     var width = canvas.width;
     var height = canvas.height;
+    var bounds = simBounds(steps);
+    var i;
+    if (simSeg > steps.length) simSeg = steps.length;
+    if (simSeg < 0) simSeg = 0;
     ctx.clearRect(0, 0, width, height);
-    var strokes = simData.strokes;
-    var bounds = simBounds(strokes);
-    var showDetail = document.getElementById("sim-show-detail").checked;
-    var slow = 1e9, fast = 0, i, j, speed;
-    for (i = 0; i < strokes.length; i++) {
-        for (j = 0; j < strokes[i].speeds.length; j++) {
-            speed = strokes[i].speeds[j];
-            if (speed < slow) slow = speed;
-            if (speed > fast) fast = speed;
-        }
-    }
-    var played = simPlaying || simFrame > 0;
-    var left = simFrame;
-    var head = null;
-    var carried = null;
-    for (i = 0; i < strokes.length; i++) {
-        var pts = strokes[i].points;
-        var limit = pts.length;
-        if (played) {
-            if (left <= 0) break;
-            if (left < pts.length) limit = left;
-            left -= pts.length;
-        }
-        ctx.beginPath();
-        for (j = 0; j < limit; j++) {
-            var at = simProject(bounds, pts[j], width, height);
-            if (j === 0) {
-                if (carried && strokes[i].stay_down !== false && simNear(carried.mm, pts[0])) ctx.moveTo(carried.at[0], carried.at[1]);
-                else ctx.moveTo(at[0], at[1]);
-            }
-            ctx.lineTo(at[0], at[1]);
-            if (played && j === limit - 1) head = { at: at, prev: j > 0 ? simProject(bounds, pts[j - 1], width, height) : at };
-        }
-        if (strokes[i].closed && limit === pts.length && pts.length > 2) {
-            var back = simProject(bounds, pts[0], width, height);
-            ctx.lineTo(back[0], back[1]);
-        }
-        if (limit > 0) carried = { mm: pts[limit - 1], at: simProject(bounds, pts[limit - 1], width, height) };
-        var force = strokes[i].forces[0] || 20;
-        ctx.lineWidth = 1.2 + Math.min(force, 500) / 90;
-        ctx.strokeStyle = played ? "#f0a050" : speedColor(strokes[i].speeds[0] || slow, slow, fast);
-        ctx.stroke();
-        if (showDetail && !played) {
-            var spans = strokes[i].detail_spans || [];
-            var s, span, p0, p1;
-            ctx.strokeStyle = "#ff6ad5";
-            ctx.lineWidth = 3;
-            for (s = 0; s < spans.length; s++) {
-                span = spans[s];
-                if (!span || span.length < 2) continue;
-                p0 = simProject(bounds, span[0], width, height);
-                p1 = simProject(bounds, span[1], width, height);
-                ctx.beginPath();
-                ctx.moveTo(p0[0], p0[1]);
-                ctx.lineTo(p1[0], p1[1]);
-                ctx.stroke();
-            }
-        }
-    }
-    if (head && head.prev) {
-        var ang = Math.atan2(head.at[1] - head.prev[1], head.at[0] - head.prev[0]);
-        ctx.save();
-        ctx.translate(head.at[0], head.at[1]);
-        ctx.rotate(ang);
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(-10, 5);
-        ctx.lineTo(-10, -5);
-        ctx.closePath();
-        ctx.fillStyle = "#ffb020";
-        ctx.fill();
-        ctx.restore();
+    simSetTip(steps);
+    if (!steps.length) return;
+    for (i = 0; i < simSeg; i++) {
+        drawSimStep(ctx, bounds, width, height, steps[i]);
     }
 }
 
-function simNear(a, b) {
-    if (!a || !b) return false;
-    var dx = a[0] - b[0];
-    var dy = a[1] - b[1];
-    return dx * dx + dy * dy < 0.02;
+function drawSimStep(ctx, bounds, width, height, step) {
+    var pts = step.points;
+    var j, at, first;
+    var screen = [];
+    if (!pts.length) return;
+    if (step.kind === "down") {
+        drawSimMark(ctx, simProject(bounds, pts[0], width, height), "down");
+        return;
+    }
+    if (step.kind === "up") {
+        drawSimMark(ctx, simProject(bounds, pts[0], width, height), "up");
+        return;
+    }
+    ctx.save();
+    ctx.lineWidth = step.kind === "tick" ? 2.5 : 1.6;
+    if (step.kind === "travel") {
+        ctx.strokeStyle = "#c8c8c8";
+        ctx.setLineDash([5, 4]);
+    } else if (step.kind === "tick") {
+        ctx.strokeStyle = "#ff4d6d";
+        ctx.setLineDash([]);
+    } else {
+        ctx.strokeStyle = "#e6b15a";
+        ctx.setLineDash([]);
+    }
+    if (pts.length > 1) {
+        ctx.beginPath();
+        for (j = 0; j < pts.length; j++) {
+            at = simProject(bounds, pts[j], width, height);
+            screen.push(at);
+            if (j === 0) ctx.moveTo(at[0], at[1]);
+            else ctx.lineTo(at[0], at[1]);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        drawSimArrows(ctx, screen, width, height);
+    }
+    ctx.restore();
+    if (step.kind !== "travel") {
+        first = simProject(bounds, pts[0], width, height);
+        drawSimMark(ctx, first, "x");
+    }
+}
+
+function simOnScreen(x, y, width, height) {
+    return x >= -40 && y >= -40 && x <= width + 40 && y <= height + 40;
+}
+
+function drawSimArrow(ctx, x, y, ang) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(ang);
+    ctx.beginPath();
+    ctx.moveTo(9, 0);
+    ctx.lineTo(-6, 4.5);
+    ctx.lineTo(-6, -4.5);
+    ctx.closePath();
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "#141414";
+    ctx.stroke();
+    ctx.restore();
+}
+
+function drawSimArrows(ctx, screen, width, height) {
+    var spacing = 46;
+    var total = 0;
+    var j, dx, dy, len, walked, next, placed, t, x, y, ang, ax, ay, bx, by, guard;
+    for (j = 1; j < screen.length; j++) {
+        dx = screen[j][0] - screen[j - 1][0];
+        dy = screen[j][1] - screen[j - 1][1];
+        total += Math.sqrt(dx * dx + dy * dy);
+    }
+    if (total < 8) return;
+    next = total < spacing ? total * 0.55 : spacing * 0.65;
+    walked = 0;
+    placed = 0;
+    guard = 0;
+    for (j = 1; j < screen.length; j++) {
+        ax = screen[j - 1][0];
+        ay = screen[j - 1][1];
+        bx = screen[j][0];
+        by = screen[j][1];
+        dx = bx - ax;
+        dy = by - ay;
+        len = Math.sqrt(dx * dx + dy * dy);
+        if (len < 0.01) continue;
+        while (walked + len >= next - 0.01) {
+            guard += 1;
+            if (guard > 4000) return;
+            t = (next - walked) / len;
+            if (t < 0) t = 0;
+            if (t > 1) t = 1;
+            x = ax + dx * t;
+            y = ay + dy * t;
+            if (simOnScreen(x, y, width, height)) {
+                ang = Math.atan2(dy, dx);
+                drawSimArrow(ctx, x, y, ang);
+                placed += 1;
+                if (placed > 120) return;
+            }
+            next += spacing;
+        }
+        walked += len;
+    }
+}
+
+function drawSimMark(ctx, at, kind) {
+    ctx.save();
+    ctx.lineWidth = 2.8;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    if (kind === "up" || kind === "down") {
+        ctx.strokeStyle = kind === "up" ? "#8fd0ff" : "#ff4d6d";
+        ctx.beginPath();
+        if (kind === "up") {
+            ctx.moveTo(at[0], at[1]);
+            ctx.lineTo(at[0], at[1] - 32);
+            ctx.moveTo(at[0] - 9, at[1] - 18);
+            ctx.lineTo(at[0], at[1] - 32);
+            ctx.lineTo(at[0] + 9, at[1] - 18);
+        } else {
+            ctx.moveTo(at[0], at[1] - 40);
+            ctx.lineTo(at[0], at[1] - 12);
+            ctx.moveTo(at[0] - 9, at[1] - 24);
+            ctx.lineTo(at[0], at[1] - 12);
+            ctx.lineTo(at[0] + 9, at[1] - 24);
+        }
+        ctx.stroke();
+    }
+    if (kind === "down" || kind === "x") {
+        ctx.strokeStyle = "#ff4d6d";
+        ctx.beginPath();
+        ctx.moveTo(at[0] - 11, at[1] - 11);
+        ctx.lineTo(at[0] + 11, at[1] + 11);
+        ctx.moveTo(at[0] + 11, at[1] - 11);
+        ctx.lineTo(at[0] - 11, at[1] + 11);
+        ctx.stroke();
+    }
+    ctx.restore();
 }
 
 function simStep(dir) {
-    if (!simData || !simData.strokes) return;
-    var total = 0;
-    var i;
-    for (i = 0; i < simData.strokes.length; i++) total += simData.strokes[i].points.length;
-    var chunk = 8 * dir;
-    simFrame += chunk;
-    if (simFrame < 0) simFrame = 0;
-    if (simFrame > total) simFrame = total;
-    simPlaying = false;
+    var total = simSteps().length;
+    if (!simData) return;
+    simSeg += dir;
+    if (simSeg < 0) simSeg = 0;
+    if (simSeg > total) simSeg = total;
     drawSimulate();
-}
-
-function simTick() {
-    if (!simPlaying || !simData || !simData.strokes) return;
-    var rate = parseInt(document.getElementById("sim-rate").value, 10) || 1;
-    var strokes = simData.strokes;
-    var pos = 0;
-    var i, into, room, step;
-    step = rate;
-    for (i = 0; i < strokes.length; i++) {
-        if (simFrame < pos + strokes[i].points.length) {
-            into = simFrame - pos;
-            room = strokes[i].points.length - into;
-            if (step > room) step = room;
-            break;
-        }
-        pos += strokes[i].points.length;
-    }
-    simFrame += step;
-    var total = 0;
-    for (i = 0; i < strokes.length; i++) total += strokes[i].points.length;
-    if (simFrame >= total) {
-        simFrame = total;
-        simPlaying = false;
-    }
-    drawSimulate();
-    if (simPlaying) simPlay = setTimeout(simTick, 40);
 }
 
 document.getElementById("squares").addEventListener("click", function () {
@@ -1584,30 +1755,67 @@ document.getElementById("simulate").addEventListener("click", function () {
     refreshSimulate();
 });
 document.getElementById("simulate-close").addEventListener("click", function () {
-    simPlaying = false;
     closeSheet("simulate-sheet");
-});
-document.getElementById("sim-refresh").addEventListener("click", refreshSimulate);
-document.getElementById("sim-play").addEventListener("click", function () {
-    simPlaying = true;
-    simTick();
-    logLine("simulate play");
-});
-document.getElementById("sim-stop").addEventListener("click", function () {
-    simPlaying = false;
-    logLine("simulate stop");
 });
 document.getElementById("sim-back").addEventListener("click", function () { simStep(-1); });
 document.getElementById("sim-forward").addEventListener("click", function () { simStep(1); });
-document.getElementById("sim-show-detail").addEventListener("change", drawSimulate);
-setInterval(function () {
-    var sheet = document.getElementById("simulate-sheet");
-    if (!sheet || sheet.className.indexOf("open") < 0 || busy || simPlaying) return;
-    var active = document.activeElement;
-    if (active && (active.tagName === "INPUT" || active.tagName === "SELECT" || active.tagName === "TEXTAREA")) return;
-    refreshSimulate();
-}, 2500);
-
+document.getElementById("sim-travel").addEventListener("change", function () {
+    simSeg = 0;
+    drawSimulate();
+});
+document.getElementById("sim-zoom-reset").addEventListener("click", simResetView);
+(function () {
+    var canvas = document.getElementById("sim-canvas");
+    canvas.addEventListener("wheel", function (event) {
+        var rect = canvas.getBoundingClientRect();
+        var x, y;
+        if (!rect.width || !rect.height) return;
+        event.preventDefault();
+        x = (event.clientX - rect.left) * (canvas.width / rect.width);
+        y = (event.clientY - rect.top) * (canvas.height / rect.height);
+        simZoomAt(x, y, event.deltaY < 0 ? 1.12 : 1 / 1.12);
+        drawSimulate();
+    }, { passive: false });
+    canvas.addEventListener("mousedown", function (event) {
+        if (!simSpace || event.button !== 0) return;
+        simPanning = true;
+        simPanLast = { x: event.clientX, y: event.clientY };
+        canvas.style.cursor = "grabbing";
+        event.preventDefault();
+    });
+    document.addEventListener("mousemove", function (event) {
+        var rect, dx, dy;
+        if (!simPanning || !simPanLast) return;
+        rect = canvas.getBoundingClientRect();
+        dx = (event.clientX - simPanLast.x) * (canvas.width / rect.width);
+        dy = (event.clientY - simPanLast.y) * (canvas.height / rect.height);
+        simPanX += dx;
+        simPanY += dy;
+        simPanLast = { x: event.clientX, y: event.clientY };
+        drawSimulate();
+    });
+    document.addEventListener("mouseup", function () {
+        simPanning = false;
+        simPanLast = null;
+        canvas.style.cursor = simSpace ? "grab" : "";
+    });
+    document.addEventListener("keydown", function (event) {
+        var tag, sheet;
+        if (event.code !== "Space") return;
+        tag = document.activeElement && document.activeElement.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        sheet = document.getElementById("simulate-sheet");
+        if (!sheet || sheet.className.indexOf("open") < 0) return;
+        simSpace = true;
+        if (!simPanning) canvas.style.cursor = "grab";
+        event.preventDefault();
+    });
+    document.addEventListener("keyup", function (event) {
+        if (event.code !== "Space") return;
+        simSpace = false;
+        if (!simPanning) canvas.style.cursor = "";
+    });
+})();
 if (!nodeRequire) {
     setStatus("Das Panel braucht den Illustrator-Erweiterungsmodus.");
 } else {

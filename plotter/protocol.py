@@ -16,11 +16,10 @@ that holder without the drag-knife corner swing.
 """
 
 import math
+import re
 
 UNITS_PER_MM = 40
-# The captured orient cut starts 21 mm along the first side. A tick on the
-# corner is the mark CameraCut does not leave.
-ORIENT_MM = 21
+PARK_TRAVEL = 200
 
 HOLDERS = {
     "left": "P0;",
@@ -81,7 +80,7 @@ def encode_job(paths, page_mm, origin_mm=(0, 0), accurate=True,
             resume=resume,
             handoff=bool(path.get("handoff")),
         )))
-    parts.append("U0,0 @ ")
+    parts.append("US%d; U0,0 @ " % PARK_TRAVEL)
     return "".join(parts)
 
 
@@ -158,7 +157,7 @@ def _camera_closed(points, radius, overcut, turn, passes, resume=False, handoff=
     finish = _extend(seam, far, overcut) if overcut > 0 else seam
     commands = []
     if turn > 0 and not resume:
-        commands.extend(_orient_cut(junction, far, radius, turn))
+        commands.extend(_turn_knife(plunge, far, turn))
     path = [plunge]
     ring = outline[:-1]
     boundaries = []
@@ -270,44 +269,18 @@ def _corner_arc(prev, corner, nxt, radius):
     return points
 
 
-def _orient_cut(junction, far, radius, length):
-    """1 mm tick beside the first side, inset from the corner."""
-    direction = _unit(far[0] - junction[0], far[1] - junction[1])
-    if direction is None:
-        return []
-    corner = (
-        junction[0] - direction[0] * radius,
-        junction[1] - direction[1] * radius,
-    )
-    span = math.hypot(far[0] - corner[0], far[1] - corner[1]) - radius
-    start = units(ORIENT_MM)
-    if span <= length or start + length > span - max(radius, 0):
-        start = max(0, (span - length) / 2.0)
-    origin = (
-        int(round(corner[0] + direction[0] * start)),
-        int(round(corner[1] + direction[1] * start)),
-    )
-    return _turn_knife(origin, far, length)
-
-
 def _turn_knife(start, nxt, length):
+    """1 mm on the cut, from its first point, so the blade faces the line."""
     direction = _unit(nxt[0] - start[0], nxt[1] - start[1])
     if direction is None:
         return []
-    # Sit one tick to the left of the cut and stroke along it, so the
-    # blade rotates before the contour. The captured tick was 1.00 mm.
-    left = (-direction[1], direction[0])
-    origin = (
-        int(round(start[0] + left[0] * length)),
-        int(round(start[1] + left[1] * length)),
-    )
     tip = (
-        int(round(origin[0] + direction[0] * length)),
-        int(round(origin[1] + direction[1] * length)),
+        int(round(start[0] + direction[0] * length)),
+        int(round(start[1] + direction[1] * length)),
     )
     return [
-        "U%d,%d" % origin,
-        "D%d,%d" % origin,
+        "U%d,%d" % start,
+        "D%d,%d" % start,
         "D%d,%d" % tip,
         "U%d,%d" % tip,
     ]
@@ -800,3 +773,220 @@ def parse_job(text):
         "moves": moves,
         "raw": text,
     }
+
+
+_SENT_TOKEN = re.compile(
+    r"P[01];|FS\d+;|VS\d+;|US\d+;|U-?\d+,-?\d+|D-?\d+,-?\d+|@"
+)
+
+
+def describe_sent(payload, paths, min_x, max_y):
+    """Group the exact plotter text and put the turn stroke back on the drawing.
+
+    paths are the anchored paths in send order. min_x and max_y are the
+    drawing's top-left, so machine coordinates land back on the art.
+    """
+    tokens = _SENT_TOKEN.findall(payload or "")
+    if tokens and tokens[-1] == "@":
+        tokens.pop()
+    park = []
+    if tokens and tokens[-1] == "U0,0":
+        park = [tokens.pop()]
+    if tokens and tokens[-1].startswith("US"):
+        park.insert(0, tokens.pop())
+    header_at = re.search(r"P[01];", payload or "")
+    header = (payload[:header_at.start()] if header_at else payload or "").strip()
+    sections = []
+    if header:
+        sections.append({
+            "title": "Header",
+            "parts": [{
+                "note": "Page size and origin. The knife does not move.",
+                "commands": header,
+            }],
+        })
+    ticks = []
+    index = 0
+    path_index = 0
+    count = len(tokens)
+    while index < count:
+        if tokens[index] not in ("P0;", "P1;") and not (
+            tokens[index].startswith("FS") and index + 1 < count and tokens[index + 1].startswith("VS")
+        ):
+            index += 1
+            continue
+        prefix = [tokens[index]]
+        index += 1
+        while index < count and (
+            tokens[index].startswith("FS") or tokens[index].startswith("VS") or tokens[index].startswith("US")
+        ):
+            prefix.append(tokens[index])
+            index += 1
+        moves = []
+        while index < count and not _path_prefix(tokens, index):
+            moves.append(tokens[index])
+            index += 1
+        path = paths[path_index] if path_index < len(paths) else {}
+        path_index += 1
+        tick, cut = _split_turn_stroke(moves)
+        title = path.get("layer") or ("Path %d" % path_index)
+        parts = [{
+            "note": _tool_note(prefix, path),
+            "commands": " ".join(prefix),
+        }]
+        if tick:
+            parts.append({
+                "note": "Turn stroke. The knife drops on the first point of the cut and draws 1 mm along that line so the blade faces it.",
+                "commands": " ".join(tick),
+            })
+            points = _stroke_points(tick, min_x, max_y)
+            if len(points) >= 2:
+                ticks.append({"points": points, "layer": title})
+        parts.append({
+            "note": _cut_note(path, prefix[0] not in ("P0;", "P1;")),
+            "commands": " ".join(cut),
+        })
+        sections.append({"title": title, "parts": parts})
+    if park:
+        sections.append({
+            "title": "Park",
+            "parts": [{
+                "note": "Knife up. Travel speed %d back to the parked start." % PARK_TRAVEL,
+                "commands": " ".join(park) + " @",
+            }],
+        })
+    return sections, ticks
+
+
+def _path_prefix(tokens, index):
+    if tokens[index] in ("P0;", "P1;"):
+        return True
+    return tokens[index].startswith("FS") and index + 1 < len(tokens) and tokens[index + 1].startswith("VS")
+
+
+def _split_turn_stroke(moves):
+    if len(moves) < 4:
+        return [], moves
+    kinds = [move[0] for move in moves[:4]]
+    if kinds != ["U", "D", "D", "U"]:
+        return [], moves
+    first = _xy(moves[0])
+    plunge = _xy(moves[1])
+    tip = _xy(moves[2])
+    lift = _xy(moves[3])
+    if first != plunge or tip != lift or tip == first:
+        return [], moves
+    span = math.hypot(tip[0] - first[0], tip[1] - first[1])
+    if abs(span - units(1)) > 2:
+        return [], moves
+    return moves[:4], moves[4:]
+
+
+def _xy(token):
+    raw = token[1:]
+    x, y = raw.split(",")
+    return int(x), int(y)
+
+
+def sent_segments(payload, min_x, max_y):
+    """Knife-up travels and knife-down runs, in illustrator millimetres."""
+    tokens = [token for token in _SENT_TOKEN.findall(payload or "") if token[0] in "UD" and "," in token]
+    segments = []
+    travel = None
+    down = None
+    last = None
+    # The head starts parked at machine 0,0, the drawing's top-left.
+    origin = _ill_point("U0,0", min_x, max_y)
+    for token in tokens:
+        point = _ill_point(token, min_x, max_y)
+        if token[0] == "U":
+            if down is not None:
+                segments.append(down)
+                down = None
+            if travel is None:
+                travel = [last] if last is not None else [origin]
+            if not travel or travel[-1] != point:
+                travel.append(point)
+            last = point
+            continue
+        if travel is not None and len(travel) >= 2:
+            segments.append({"kind": "travel", "points": travel})
+        travel = None
+        if down is None:
+            down = {"kind": "cut", "points": [point]}
+        elif down["points"][-1] != point:
+            down["points"].append(point)
+        last = point
+    if down is not None:
+        segments.append(down)
+    elif travel is not None and len(travel) >= 2:
+        segments.append({"kind": "travel", "points": travel})
+    for index, segment in enumerate(segments):
+        if segment["kind"] != "cut" or len(segment["points"]) != 2:
+            continue
+        span = math.hypot(
+            segment["points"][1][0] - segment["points"][0][0],
+            segment["points"][1][1] - segment["points"][0][1],
+        )
+        if abs(span - 1.0) > 0.05:
+            continue
+        for later in segments[index + 1:]:
+            if later["kind"] == "travel":
+                continue
+            if later["points"] and later["points"][0] == segment["points"][0]:
+                segment["kind"] = "tick"
+            break
+    return segments
+
+
+def _ill_point(token, min_x, max_y):
+    mx, my = _xy(token)
+    return [
+        round(min_x - (my / float(UNITS_PER_MM)), 3),
+        round((mx / float(UNITS_PER_MM)) + max_y, 3),
+    ]
+
+
+def _stroke_points(moves, min_x, max_y):
+    points = []
+    for move in moves:
+        if move[0] != "D":
+            continue
+        mx, my = _xy(move)
+        points.append([
+            round(min_x - (my / float(UNITS_PER_MM)), 3),
+            round((mx / float(UNITS_PER_MM)) + max_y, 3),
+        ])
+    return points
+
+
+def _tool_note(prefix, path):
+    holder = "right" if prefix and prefix[0] == "P1;" else "left"
+    if prefix and prefix[0] not in ("P0;", "P1;"):
+        holder = path.get("holder") or holder
+    force = _prefixed(prefix, "FS")
+    speed = _prefixed(prefix, "VS")
+    travel = _prefixed(prefix, "US")
+    text = "%s holder, force %s, cut speed %s" % (holder.capitalize(), force, speed)
+    if travel is not None:
+        text += ", travel %s" % travel
+    text += "."
+    return text
+
+
+def _prefixed(prefix, name):
+    for token in prefix:
+        if token.startswith(name):
+            return token[len(name):-1]
+    return None
+
+
+def _cut_note(path, resumed):
+    passes = int(path.get("passes", 1) or 1)
+    if resumed:
+        return "Knife stays down from the previous path. These passes continue the same line. Zusammenhaengend is on."
+    if path.get("stay_down") is False:
+        return "Knife lifts before this path, then stays down for all %d passes. Zusammenhaengend is off, so the next path starts with its own plunge." % passes
+    if passes > 1:
+        return "Knife plunges once and stays down for all %d passes." % passes
+    return "Knife plunges once and follows the outline."

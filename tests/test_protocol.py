@@ -9,8 +9,8 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "plotter"))
 
 from pattern import SPEEDS, FORCES, build_test_pattern, encode_test_pattern
-from protocol import encode_job, fine_spans, parse_job, preview_strokes, speed_at, units
-from send_job import job_from_document
+from protocol import describe_sent, encode_job, fine_spans, parse_job, preview_strokes, speed_at, units
+from send_job import job_from_document, sent_view
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "square_knife.job")
 
@@ -42,7 +42,7 @@ class EncoderTest(unittest.TestCase):
     def test_header_uses_captured_commands(self):
         text = _knife_square()
         self.assertTrue(text.startswith("IN FSIZE11880,16800 CMD:32,11880,16800,0,0;CMD:35,2,1,0;"))
-        self.assertTrue(text.endswith("U0,0 @ "))
+        self.assertTrue(text.endswith("US200; U0,0 @ "))
         self.assertIn("P0;FS20;VS10;US30;", text)
 
     def test_right_holder_and_speeds(self):
@@ -80,7 +80,7 @@ class EncoderTest(unittest.TestCase):
         self.assertIn("D%d,0" % (units(10) + units(0.25)), text)
         self.assertNotIn("D%d,0" % (units(10) + units(0.35)), text)
 
-    def test_orient_cut_stays_off_the_corners(self):
+    def test_orient_cut_lies_on_the_start_of_the_cut(self):
         text = encode_job([{
             "holder": "left",
             "mode": "cut",
@@ -90,10 +90,12 @@ class EncoderTest(unittest.TestCase):
             "closed": True,
             "points_mm": [[0, 0], [0, 122], [113.2, 122], [113.2, 0]],
         }], (420, 297), accurate=True, blade_offset_mm=0.35, turn_knife_mm=1)
-        downs = [move for move in parse_job(text)["moves"] if move[0] == "D"]
+        moves = parse_job(text)["moves"]
+        downs = [move for move in moves if move[0] == "D"]
         tick = downs[:2]
         span = abs(tick[1][1] - tick[0][1]) + abs(tick[1][2] - tick[0][2])
         self.assertEqual(span, units(1))
+        self.assertEqual(moves[0][1:], moves[4][1:])
         corners = [
             (0, 0),
             (0, units(122)),
@@ -102,7 +104,7 @@ class EncoderTest(unittest.TestCase):
         ]
         for move in tick:
             nearest = min(abs(move[1] - x) + abs(move[2] - y) for x, y in corners)
-            self.assertGreater(nearest, units(15))
+            self.assertLess(nearest, units(2))
 
     def test_turn_knife_is_one_millimetre(self):
         text = _knife_square(turn_knife_mm=1, overcut_mm=0)
@@ -110,6 +112,38 @@ class EncoderTest(unittest.TestCase):
         downs = [move for move in job["moves"] if move[0] == "D"]
         span = abs(downs[1][1] - downs[0][1]) + abs(downs[1][2] - downs[0][2])
         self.assertEqual(span, units(1))
+
+    def test_simulate_lists_the_turn_stroke_and_places_it_beside_the_cut(self):
+        shape = _path("right", "cut", 40, 1, 20, [[0, 0], [30, 0], [30, 20], [0, 20]])
+        shape["layer"] = "Star"
+        shape["closed"] = True
+        shape["passes"] = 1
+        shape["stay_down"] = True
+        view = sent_view({
+            "anchor": "top-left",
+            "page_mm": [100, 100],
+            "blade_offset_mm": 0.35,
+            "turn_knife_mm": 1,
+            "paths": [shape],
+        })
+        titles = [section["title"] for section in view["sections"]]
+        self.assertIn("Header", titles)
+        self.assertIn("Star", titles)
+        self.assertIn("Park", titles)
+        star = [section for section in view["sections"] if section["title"] == "Star"][0]
+        notes = " ".join(part["note"] for part in star["parts"])
+        self.assertIn("Turn stroke", notes)
+        self.assertIn("first point of the cut", notes)
+        self.assertEqual(len(view["ticks"]), 1)
+        tick = view["ticks"][0]["points"]
+        span = ((tick[1][0] - tick[0][0]) ** 2 + (tick[1][1] - tick[0][1]) ** 2) ** 0.5
+        self.assertAlmostEqual(span, 1.0, places=1)
+        mid_x = (tick[0][0] + tick[1][0]) / 2.0
+        mid_y = (tick[0][1] + tick[1][1]) / 2.0
+        self.assertAlmostEqual(_distance_to_box(mid_x, mid_y, 0, 30, 0, 20), 0.0, places=1)
+        kinds = [segment["kind"] for segment in view["segments"]]
+        self.assertIn("tick", kinds)
+        self.assertLess(kinds.index("tick"), kinds.index("cut"))
 
     def test_overcut_continues_past_the_start(self):
         text = _knife_square(turn_knife_mm=0, overcut_mm=3, accurate=True)
@@ -128,7 +162,7 @@ class EncoderTest(unittest.TestCase):
         )
         moves = parse_job(text)["moves"]
         body = text.split("US30;", 1)[1].replace(";", " ")
-        ups = [token for token in body.split() if token.startswith("U")]
+        ups = [token for token in body.split() if token.startswith("U") and "," in token]
         self.assertEqual(ups, ["U0,%d" % (units(10) - 2 * units(0.35)), "U0,0"])
         longs = _long_cuts(moves)
         self.assertEqual(len(longs), 8)
@@ -440,6 +474,18 @@ def _cut_starts(text):
         found = re.search(r"U(-?\d+),(-?\d+)", part)
         starts.append((int(found.group(1)), int(found.group(2))))
     return starts
+
+
+def _distance_to_box(x, y, left, right, bottom, top):
+    dx = 0 if left <= x <= right else min(abs(x - left), abs(x - right))
+    dy = 0 if bottom <= y <= top else min(abs(y - bottom), abs(y - top))
+    if left <= x <= right and bottom <= y <= top:
+        return min(x - left, right - x, y - bottom, top - y)
+    if left <= x <= right:
+        return dy
+    if bottom <= y <= top:
+        return dx
+    return (dx * dx + dy * dy) ** 0.5
 
 
 def _path(holder, mode, force, speed, travel, points):

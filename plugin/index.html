@@ -150,25 +150,18 @@
                 <span>Simulate</span>
                 <button id="simulate-close" type="button">Schliessen</button>
             </div>
-            <canvas id="sim-canvas" width="640" height="420"></canvas>
+            <canvas id="sim-canvas" width="640" height="480"></canvas>
             <div id="sim-tip" class="sim-tip">Punkt waehlen</div>
             <div class="line">
-                <button id="sim-refresh" type="button">Refresh</button>
-                <button id="sim-play" type="button">Play</button>
-                <button id="sim-stop" type="button">Stop</button>
                 <button id="sim-back" type="button">Zurueck</button>
                 <button id="sim-forward" type="button">Vor</button>
-                <label for="sim-rate">Speed</label>
-                <select id="sim-rate">
-                    <option value="1">1x</option>
-                    <option value="2">2x</option>
-                    <option value="3">3x</option>
-                </select>
             </div>
-            <label class="check" for="sim-show-detail">
-                <input id="sim-show-detail" type="checkbox">
-                Show areas with high detail
+            <label class="check" for="sim-travel">
+                <input id="sim-travel" type="checkbox" checked>
+                Travel anzeigen
             </label>
+            <button id="sim-zoom-reset" type="button" title="Zoom und Verschiebung zuruecksetzen">Reset</button>
+            <div id="sim-commands" class="sim-commands"></div>
         </div>
     </div>
 

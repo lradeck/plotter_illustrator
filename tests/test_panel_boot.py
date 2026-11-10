@@ -44,6 +44,9 @@ var list = document.getElementById("history");
 var err = "";
 try { rememberJob("C:/temp/job.json", "192.168.0.200", "8080", 3); }
 catch (e) { err = String(e && e.message ? e.message : e); }
+renderSimCommands([{title: "Star shape", parts: [{note: "Turn stroke", commands: "U1,2 D1,2"}]}]);
+var commands = document.getElementById("sim-commands");
+var opened = commands && commands.querySelector("details") ? commands.querySelector("details").open : true;
 var box = list.getBoundingClientRect();
 var probe = document.createElement("pre");
 probe.id = "panel-probe";
@@ -54,7 +57,9 @@ probe.textContent = JSON.stringify({
     bottom: box.bottom,
     innerHeight: window.innerHeight,
     jobs: (typeof plotJobs !== "undefined" && plotJobs) ? plotJobs.length : -1,
-    err: err
+    err: err,
+    commands: commands ? commands.textContent : "",
+    commandOpen: opened
 });
 document.body.appendChild(probe);
 </script>
@@ -103,6 +108,9 @@ document.body.appendChild(probe);
         self.assertIn("ca. 9:20", probe_data["text"])
         self.assertIn("3 Pfade", probe_data["text"])
         self.assertIn("ca. 1 s", probe_data["text"])
+        self.assertIn("Star shape", probe_data["commands"])
+        self.assertIn("Turn stroke", probe_data["commands"])
+        self.assertFalse(probe_data["commandOpen"])
         self.assertGreaterEqual(probe_data["height"], 24)
         self.assertLess(probe_data["top"], probe_data["innerHeight"])
         self.assertGreater(probe_data["bottom"], 0)

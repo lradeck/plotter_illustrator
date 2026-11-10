@@ -515,6 +515,7 @@ class ForceCardTest(unittest.TestCase):
         self.assertIn('id="axis-titles"', html)
         self.assertIn('id="connect-loops"', html)
         self.assertIn('id="history"', html)
+        self.assertIn('id="sim-commands"', html)
         self.assertNotIn('id="blade"', html)
         self.assertNotIn('id="turn"', html)
         self.assertIn('id="config-save"', html)

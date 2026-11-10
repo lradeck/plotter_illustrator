@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from force_card import build_force_card, join_strokes
 from pattern import encode_test_pattern
-from protocol import encode_job, preview_strokes
+from protocol import describe_sent, encode_job, preview_strokes, sent_segments
 
 
 def send_text(payload, host, port, timeout=5.0):
@@ -20,6 +20,49 @@ def send_text(payload, host, port, timeout=5.0):
     finally:
         sock.close()
     return payload
+
+
+def sent_view(document):
+    """Preview geometry plus the commands a real send would write."""
+    raw = []
+    for path in document.get("paths") or []:
+        copy = dict(path)
+        copy["points_mm"] = [list(pt) for pt in path.get("points_mm") or []]
+        raw.append(copy)
+    preview_paths = []
+    for path in raw:
+        copy = dict(path)
+        copy["points_mm"] = [list(pt) for pt in path["points_mm"]]
+        preview_paths.append(copy)
+    strokes = preview_strokes(expand_stay_chains(_group_stay(preview_paths)))
+    points = [pt for path in raw for pt in path["points_mm"]]
+    if not points:
+        return {"strokes": strokes, "ticks": [], "segments": [], "sections": []}
+    min_x = min(pt[0] for pt in points)
+    max_y = max(pt[1] for pt in points)
+    paths = raw
+    page = document.get("page_mm", [297, 420])
+    origin = document.get("origin_mm", [0, 0])
+    if document.get("anchor") == "top-left":
+        paths, page = anchor_top_left(paths)
+        origin = (0, 0)
+    payload = encode_job(
+        paths,
+        page,
+        origin,
+        accurate=document.get("accurate", True),
+        blade_offset_mm=document.get("blade_offset_mm", 0.35),
+        overcut_mm=document.get("overcut_mm", 0.0),
+        turn_knife_mm=document.get("turn_knife_mm", 1.0),
+        alternate=bool(document.get("alternate", False)),
+    )
+    sections, ticks = describe_sent(payload, paths, min_x, max_y)
+    return {
+        "strokes": strokes,
+        "ticks": ticks,
+        "segments": sent_segments(payload, min_x, max_y),
+        "sections": sections,
+    }
 
 
 def job_from_document(document):
@@ -659,12 +702,7 @@ def main(argv=None):
         if document is None:
             parser.error("--preview-out needs a job file")
         with open(args.preview_out, "w") as handle:
-            preview_paths = []
-            for path in document.get("paths") or []:
-                copy = dict(path)
-                copy["points_mm"] = [list(pt) for pt in path.get("points_mm") or []]
-                preview_paths.append(copy)
-            json.dump({"strokes": preview_strokes(expand_stay_chains(_group_stay(preview_paths)))}, handle)
+            json.dump(sent_view(document), handle)
         return 0
     if args.out:
         with open(args.out, "w") as handle:
