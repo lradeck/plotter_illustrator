@@ -1385,6 +1385,7 @@ function drawSimulate() {
     for (i = 0; i < simSeg; i++) {
         drawSimStep(ctx, bounds, width, height, steps[i]);
     }
+    drawSimBlade(ctx, bounds, width, height, steps);
 }
 
 function drawSimStep(ctx, bounds, width, height, step) {
@@ -1429,6 +1430,102 @@ function drawSimStep(ctx, bounds, width, height, step) {
         first = simProject(bounds, pts[0], width, height);
         drawSimMark(ctx, first, "x");
     }
+}
+
+function simBladeOffset() {
+    var value = simData && simData.blade_offset_mm;
+    if (typeof value === "number" && value > 0) return value;
+    return 0.35;
+}
+
+function simSegmentDir(points, fromStart) {
+    var i, dx, dy, a, b;
+    if (!points || points.length < 2) return null;
+    if (fromStart) {
+        for (i = 1; i < points.length; i++) {
+            dx = points[i][0] - points[i - 1][0];
+            dy = points[i][1] - points[i - 1][1];
+            if (dx * dx + dy * dy > 1e-8) return [dx, dy];
+        }
+        return null;
+    }
+    for (i = points.length - 1; i > 0; i--) {
+        a = points[i];
+        b = points[i - 1];
+        dx = a[0] - b[0];
+        dy = a[1] - b[1];
+        if (dx * dx + dy * dy > 1e-8) return [dx, dy];
+    }
+    return null;
+}
+
+function simKnifeTip(steps) {
+    var step, nxt, i, dir, len, offset, center;
+    if (simSeg <= 0) return null;
+    step = steps[simSeg - 1];
+    if (!step || step.kind === "up" || step.kind === "travel") return null;
+    if (step.kind === "down") {
+        center = step.points[0];
+        dir = null;
+        for (i = simSeg; i < steps.length; i++) {
+            nxt = steps[i];
+            if (nxt.kind !== "tick" && nxt.kind !== "cut") continue;
+            dir = simSegmentDir(nxt.points, true);
+            break;
+        }
+    } else {
+        center = step.points[step.points.length - 1];
+        dir = simSegmentDir(step.points, false);
+    }
+    if (!center || !dir) return null;
+    len = Math.sqrt(dir[0] * dir[0] + dir[1] * dir[1]);
+    if (len < 1e-8) return null;
+    offset = simBladeOffset();
+    return {
+        center: center,
+        tip: [center[0] - dir[0] / len * offset, center[1] - dir[1] / len * offset],
+        dir: dir
+    };
+}
+
+function simCenterOn() {
+    var box = document.getElementById("sim-center");
+    return !box || box.checked;
+}
+
+function drawSimBlade(ctx, bounds, width, height, steps) {
+    var pose = simKnifeTip(steps);
+    var at, ahead, ang, hub;
+    if (!pose) return;
+    at = simProject(bounds, pose.tip, width, height);
+    ahead = simProject(bounds, [pose.tip[0] + pose.dir[0], pose.tip[1] + pose.dir[1]], width, height);
+    ang = Math.atan2(ahead[1] - at[1], ahead[0] - at[0]);
+    if (simCenterOn()) {
+        hub = simProject(bounds, pose.center, width, height);
+        ctx.save();
+        ctx.strokeStyle = "#9ad0ff";
+        ctx.fillStyle = "#9ad0ff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(hub[0], hub[1]);
+        ctx.lineTo(at[0], at[1]);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(hub[0], hub[1], 5.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+    ctx.save();
+    ctx.translate(at[0], at[1]);
+    ctx.rotate(ang);
+    ctx.beginPath();
+    ctx.moveTo(16, 0);
+    ctx.lineTo(-10, 8);
+    ctx.lineTo(-10, -8);
+    ctx.closePath();
+    ctx.fillStyle = "#ff8a00";
+    ctx.fill();
+    ctx.restore();
 }
 
 function simOnScreen(x, y, width, height) {
@@ -1763,6 +1860,7 @@ document.getElementById("sim-travel").addEventListener("change", function () {
     simSeg = 0;
     drawSimulate();
 });
+document.getElementById("sim-center").addEventListener("change", drawSimulate);
 document.getElementById("sim-zoom-reset").addEventListener("click", simResetView);
 (function () {
     var canvas = document.getElementById("sim-canvas");

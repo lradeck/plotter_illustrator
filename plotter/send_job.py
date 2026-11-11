@@ -62,6 +62,7 @@ def sent_view(document):
         "ticks": ticks,
         "segments": sent_segments(payload, min_x, max_y),
         "sections": sections,
+        "blade_offset_mm": float(document.get("blade_offset_mm", 0.35)),
     }
 
 
