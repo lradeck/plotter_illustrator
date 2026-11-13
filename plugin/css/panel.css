@@ -214,7 +214,9 @@ button.toggle.on {
     padding: 2px 8px;
     font-size: 11px;
 }
-.sim-tip { min-height: 18px; color: #d0d0d0; }
+.sim-controls { flex-wrap: nowrap; }
+.sim-controls button { flex: 0 0 auto; }
+.sim-tip { height: 36px; overflow: hidden; color: #d0d0d0; line-height: 18px; }
 .sim-commands { display: flex; flex-direction: column; gap: 4px; }
 .sim-commands details { background: #1f1f1f; border-radius: 4px; }
 .sim-commands summary { cursor: pointer; padding: 6px 8px; color: #f2f2f2; }

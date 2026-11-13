@@ -1166,6 +1166,9 @@ function applyHistoryTemplate() {
 
 var simData = null;
 var simSeg = 0;
+var simPart = 0;
+var simPlayTimer = 0;
+var simPlayTarget = 0;
 var simCommandStamp = "";
 var simZoom = 1;
 var simPanX = 0;
@@ -1194,7 +1197,9 @@ function refreshSimulate() {
                     return;
                 }
                 simData = JSON.parse(fs.readFileSync(previewPath, "utf8"));
+                simStopPlay();
                 simSeg = 0;
+                simPart = 0;
                 renderSimCommands(simData.sections);
                 drawSimulate();
                 var count = simData.strokes ? simData.strokes.length : 0;
@@ -1254,19 +1259,25 @@ function simSteps() {
     var all = simData && simData.segments ? simData.segments : [];
     var showTravel = simTravelOn();
     var steps = [];
-    var i, seg, pts;
+    var i, seg, pts, open, last;
+    open = false;
+    last = null;
     for (i = 0; i < all.length; i++) {
         seg = all[i];
         pts = seg.points || [];
         if (!pts.length) continue;
         if (seg.kind === "travel") {
+            if (open && last) steps.push({ kind: "up", points: [last] });
+            open = false;
             if (showTravel && pts.length >= 2) steps.push({ kind: "travel", points: pts });
             continue;
         }
-        steps.push({ kind: "down", points: [pts[0]] });
-        if (pts.length >= 2) steps.push({ kind: seg.kind, points: pts });
-        steps.push({ kind: "up", points: [pts[pts.length - 1]] });
+        if (!open) steps.push({ kind: "down", points: [pts[0]] });
+        steps.push({ kind: seg.kind, points: pts, force: seg.force });
+        open = true;
+        last = pts[pts.length - 1];
     }
+    if (open && last) steps.push({ kind: "up", points: [last] });
     return steps;
 }
 
@@ -1277,7 +1288,7 @@ function simStepTitle(steps, index) {
     if (step.kind === "down") return "Messer runter";
     if (step.kind === "up") return "Messer hoch";
     if (step.kind === "tick") return "1 mm schneiden";
-    if (step.kind === "cut") return "Pfad schneiden";
+    if (step.kind === "cut") return step.force ? ("Durchgang F" + step.force) : "Pfad schneiden";
     nxt = steps[index + 1];
     if (!nxt) return "Fahrt zurueck zum Start";
     if (nxt.kind === "down") {
@@ -1385,14 +1396,27 @@ function drawSimulate() {
     for (i = 0; i < simSeg; i++) {
         drawSimStep(ctx, bounds, width, height, steps[i]);
     }
+    if (simPart > 0 && simSeg < steps.length) {
+        drawSimStep(ctx, bounds, width, height, steps[simSeg], simPart);
+    }
     drawSimBlade(ctx, bounds, width, height, steps);
 }
 
-function drawSimStep(ctx, bounds, width, height, step) {
+function simForceWidth(force) {
+    var f = typeof force === "number" ? force : 13;
+    var width = 1.2 + Math.max(0, f - 8) * 0.45;
+    if (width > 8) width = 8;
+    return width;
+}
+
+function drawSimStep(ctx, bounds, width, height, step, limit) {
     var pts = step.points;
-    var j, at, first;
+    var j, at, first, count;
     var screen = [];
     if (!pts.length) return;
+    count = pts.length;
+    if (typeof limit === "number" && limit < count) count = limit;
+    if (count < 1) return;
     if (step.kind === "down") {
         drawSimMark(ctx, simProject(bounds, pts[0], width, height), "down");
         return;
@@ -1402,7 +1426,7 @@ function drawSimStep(ctx, bounds, width, height, step) {
         return;
     }
     ctx.save();
-    ctx.lineWidth = step.kind === "tick" ? 2.5 : 1.6;
+    ctx.lineWidth = step.kind === "travel" ? 1.4 : (step.kind === "tick" ? 2.4 : simForceWidth(step.force));
     if (step.kind === "travel") {
         ctx.strokeStyle = "#c8c8c8";
         ctx.setLineDash([5, 4]);
@@ -1413,9 +1437,9 @@ function drawSimStep(ctx, bounds, width, height, step) {
         ctx.strokeStyle = "#e6b15a";
         ctx.setLineDash([]);
     }
-    if (pts.length > 1) {
+    if (count > 1) {
         ctx.beginPath();
-        for (j = 0; j < pts.length; j++) {
+        for (j = 0; j < count; j++) {
             at = simProject(bounds, pts[j], width, height);
             screen.push(at);
             if (j === 0) ctx.moveTo(at[0], at[1]);
@@ -1460,9 +1484,15 @@ function simSegmentDir(points, fromStart) {
 }
 
 function simKnifeTip(steps) {
-    var step, nxt, i, dir, len, offset, center;
-    if (simSeg <= 0) return null;
-    step = steps[simSeg - 1];
+    var step, nxt, i, dir, len, offset, center, partial;
+    if (simPart > 1 && simSeg < steps.length) {
+        partial = steps[simSeg];
+        if (partial && (partial.kind === "cut" || partial.kind === "tick")) {
+            step = { kind: partial.kind, points: partial.points.slice(0, simPart) };
+        }
+    }
+    if (!step && simSeg <= 0) return null;
+    if (!step) step = steps[simSeg - 1];
     if (!step || step.kind === "up" || step.kind === "travel") return null;
     if (step.kind === "down") {
         center = step.points[0];
@@ -1627,13 +1657,83 @@ function drawSimMark(ctx, at, kind) {
     ctx.restore();
 }
 
+function simStopPlay() {
+    if (simPlayTimer) clearTimeout(simPlayTimer);
+    simPlayTimer = 0;
+}
+
 function simStep(dir) {
     var total = simSteps().length;
     if (!simData) return;
+    simStopPlay();
+    simPart = 0;
     simSeg += dir;
     if (simSeg < 0) simSeg = 0;
     if (simSeg > total) simSeg = total;
     drawSimulate();
+}
+
+function simRestart() {
+    simStopPlay();
+    simSeg = 0;
+    simPart = 0;
+    drawSimulate();
+}
+
+function simPlayPass() {
+    var steps, i, target;
+    if (!simData) return;
+    simStopPlay();
+    simPart = 0;
+    steps = simSteps();
+    target = simSeg;
+    for (i = simSeg; i < steps.length; i++) {
+        if (steps[i].kind === "cut") {
+            target = i + 1;
+            break;
+        }
+    }
+    if (target <= simSeg) {
+        for (i = simSeg; i < steps.length; i++) {
+            if (steps[i].kind === "tick") {
+                target = i + 1;
+                break;
+            }
+        }
+    }
+    if (target <= simSeg) return;
+    simPlayTarget = target;
+    simPassTick();
+}
+
+function simPassTick() {
+    var steps, step, n, jump;
+    steps = simSteps();
+    if (simSeg >= simPlayTarget) {
+        simPart = 0;
+        simStopPlay();
+        drawSimulate();
+        return;
+    }
+    step = steps[simSeg];
+    if (step && (step.kind === "cut" || step.kind === "tick")) {
+        n = step.points.length;
+        jump = Math.max(1, Math.ceil(n / 16));
+        simPart += jump;
+        if (simPart >= n) {
+            simSeg += 1;
+            simPart = 0;
+        }
+    } else {
+        simSeg += 1;
+        simPart = 0;
+    }
+    drawSimulate();
+    if (simSeg >= simPlayTarget && simPart === 0) {
+        simStopPlay();
+        return;
+    }
+    simPlayTimer = setTimeout(simPassTick, 28);
 }
 
 document.getElementById("squares").addEventListener("click", function () {
@@ -1852,11 +1952,16 @@ document.getElementById("simulate").addEventListener("click", function () {
     refreshSimulate();
 });
 document.getElementById("simulate-close").addEventListener("click", function () {
+    simStopPlay();
     closeSheet("simulate-sheet");
 });
 document.getElementById("sim-back").addEventListener("click", function () { simStep(-1); });
 document.getElementById("sim-forward").addEventListener("click", function () { simStep(1); });
+document.getElementById("sim-pass").addEventListener("click", simPlayPass);
+document.getElementById("sim-restart").addEventListener("click", simRestart);
 document.getElementById("sim-travel").addEventListener("change", function () {
+    simStopPlay();
+    simPart = 0;
     simSeg = 0;
     drawSimulate();
 });

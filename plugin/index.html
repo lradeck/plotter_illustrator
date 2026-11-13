@@ -151,11 +151,13 @@
                 <button id="simulate-close" type="button">Schliessen</button>
             </div>
             <canvas id="sim-canvas" width="640" height="480"></canvas>
-            <div id="sim-tip" class="sim-tip">Punkt waehlen</div>
-            <div class="line">
+            <div class="line sim-controls">
                 <button id="sim-back" type="button">Zurueck</button>
                 <button id="sim-forward" type="button">Vor</button>
+                <button id="sim-pass" type="button" title="Einen Durchgang vorspulen">Durchgang</button>
+                <button id="sim-restart" type="button" title="An den Anfang">Anfang</button>
             </div>
+            <div id="sim-tip" class="sim-tip">Punkt waehlen</div>
             <label class="check" for="sim-travel">
                 <input id="sim-travel" type="checkbox" checked>
                 Travel anzeigen

@@ -560,12 +560,52 @@ class ProfileTest(unittest.TestCase):
             "blade_offset_mm": 0,
         })
         ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
-        self.assertEqual(len(ups), 2)
-        self.assertEqual(ups[0], (str(units(-10)), "0"))
+        self.assertEqual(len(ups), 3)
         self.assertIn("FS12;", text)
         self.assertIn("FS30;", text)
         self.assertIn("VS15;", text)
         self.assertIn("VS80;", text)
+
+    def test_pass_count_of_one_color_does_not_repeat_the_copy(self):
+        black = _path("left", "cut", 13, 3, 200, [[0, 0], [10, 0], [10, 10], [0, 10]])
+        red = _path("left", "cut", 15, 3, 200, [[0, 0], [10, 0], [10, 10], [0, 10]])
+        for path, rgb, passes, layer in (
+            (black, [0, 0, 0], 4, "Left F13 x4"),
+            (red, [255, 0, 0], 1, "Left F15 x1"),
+        ):
+            path["rgb"] = rgb
+            path["passes"] = passes
+            path["stay_down"] = True
+            path["closed"] = True
+            path["layer"] = layer
+        text = job_from_document({
+            "paths": [black, red],
+            "page_mm": [40, 40],
+            "anchor": "top-left",
+            "accurate": False,
+            "turn_knife_mm": 0,
+            "blade_offset_mm": 0,
+        })
+        # The copy sits on the same line. Its own pass count is one, and the
+        # knife lifts before that plunge so the new force is the one used.
+        corner = "D%d,%d" % (units(-10), units(-10))
+        self.assertEqual(text.count(corner), 5)
+        self.assertEqual(text.count("FS13;"), 1)
+        self.assertEqual(text.count("FS15;"), 1)
+        gap = text[text.index("FS15;"):]
+        self.assertRegex(gap, r"FS15;VS\d+;US\d+;U-?\d+,-?\d+")
+        view = sent_view({
+            "paths": [black, red],
+            "page_mm": [40, 40],
+            "anchor": "top-left",
+            "accurate": False,
+            "turn_knife_mm": 0,
+            "blade_offset_mm": 0,
+        })
+        cuts = [segment for segment in view["segments"] if segment["kind"] == "cut"]
+        self.assertEqual([segment.get("force") for segment in cuts], [13, 13, 13, 13, 15])
+        self.assertTrue(cuts[1].get("continues"))
+        self.assertFalse(cuts[4].get("continues"))
 
     def test_stay_down_joins_squares_that_share_a_corner(self):
         left = _path("left", "cut", 20, 10, 30, [[0, 0], [10, 0], [10, 10], [0, 10]])
@@ -583,8 +623,7 @@ class ProfileTest(unittest.TestCase):
             "blade_offset_mm": 0,
         })
         ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
-        self.assertEqual(len(ups), 2)
-        self.assertEqual(ups[0], (str(-units(10)), str(-units(10))))
+        self.assertEqual(len(ups), 3)
 
     def test_split_loop_repeats_the_whole_outline(self):
         ring = [
@@ -612,10 +651,9 @@ class ProfileTest(unittest.TestCase):
             "blade_offset_mm": 0,
         })
         ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
-        self.assertEqual(len(ups), 2)
-        self.assertEqual(ups[0], (str(units(-10)), "0"))
-        self.assertEqual(text.count("VS1;"), 8)
-        self.assertGreaterEqual(text.count("VS10;"), 8)
+        self.assertEqual(len(ups), 5)
+        self.assertEqual(text.count("VS1;"), 2)
+        self.assertEqual(text.count("VS10;"), 2)
 
     def test_separate_paths_still_lift_when_stay_down_is_off(self):
         first = _path("left", "cut", 20, 10, 30, [[0, 0], [10, 0]])
@@ -679,11 +717,9 @@ class ProfileTest(unittest.TestCase):
             "blade_offset_mm": 0,
         })
         ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
-        self.assertEqual(len(ups), 17)
-        self.assertEqual(ups[0], (str(units(-10)), "0"))
-        self.assertEqual(ups[1], (str(units(-10)), str(units(-10))))
-        self.assertEqual(text.count("FS1;"), 8)
-        self.assertGreaterEqual(text.count("FS14;"), 8)
+        self.assertEqual(len(ups), 5)
+        self.assertEqual(text.count("FS1;"), 2)
+        self.assertEqual(text.count("FS14;"), 2)
         self.assertIsNone(re.search(r"FS1;VS1;D", text))
 
     def test_each_pass_can_use_its_own_force(self):

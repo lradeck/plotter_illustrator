@@ -56,11 +56,22 @@ def sent_view(document):
         turn_knife_mm=document.get("turn_knife_mm", 1.0),
         alternate=bool(document.get("alternate", False)),
     )
+    preview = encode_job(
+        paths,
+        page,
+        origin,
+        accurate=document.get("accurate", True),
+        blade_offset_mm=document.get("blade_offset_mm", 0.35),
+        overcut_mm=document.get("overcut_mm", 0.0),
+        turn_knife_mm=document.get("turn_knife_mm", 1.0),
+        alternate=bool(document.get("alternate", False)),
+        keep_laps=True,
+    )
     sections, ticks = describe_sent(payload, paths, min_x, max_y)
     return {
         "strokes": strokes,
         "ticks": ticks,
-        "segments": sent_segments(payload, min_x, max_y),
+        "segments": sent_segments(preview, min_x, max_y),
         "sections": sections,
         "blade_offset_mm": float(document.get("blade_offset_mm", 0.35)),
     }
@@ -333,7 +344,21 @@ def _joint_points(path):
     return [pts[0], pts[-1]]
 
 
+def _same_color(a, b):
+    """A pass count and a force belong to one stroke color."""
+    left = a.get("rgb")
+    right = b.get("rgb")
+    if (
+        isinstance(left, (list, tuple)) and isinstance(right, (list, tuple))
+        and len(left) >= 3 and len(right) >= 3
+    ):
+        return [int(round(v)) for v in left[:3]] == [int(round(v)) for v in right[:3]]
+    return (a.get("layer") or "") == (b.get("layer") or "")
+
+
 def _touches(a, b):
+    if not _same_color(a, b):
+        return False
     if a.get("holder") != b.get("holder"):
         return False
     if (a.get("mode") or "cut") != (b.get("mode") or "cut"):
@@ -500,43 +525,17 @@ def _mark_resume(chain):
 
 
 def _group_stay(paths):
-    """Keep touching paths together and aim each one along the cut.
+    """Leave every path on its own.
 
-    Zusammenhaengend and the lift mode share this order. The lift mode
-    only leaves the knife up at the joint between two pieces.
+    Two separate paths that merely share a point are not one cut. A closed
+    path still keeps the knife down for its own passes.
     """
-    used = [False] * len(paths)
-    ordered = []
     for index, path in enumerate(paths):
-        if used[index]:
-            continue
-        if len(path.get("points_mm") or []) < 2:
-            ordered.append(path)
-            used[index] = True
-            continue
-        group = [index]
-        used[index] = True
-        grew = True
-        while grew:
-            grew = False
-            for other in range(len(paths)):
-                if used[other] or len(paths[other].get("points_mm") or []) < 2:
-                    continue
-                if any(_touches(paths[member], paths[other]) for member in group):
-                    group.append(other)
-                    used[other] = True
-                    grew = True
-        members = [paths[member] for member in group]
-        if len(members) == 1:
-            ordered.append(members[0])
-            continue
-        incoming = (0.0, 0.0)
-        if ordered:
-            incoming = _geom_end(ordered[-1])
-        ordered.extend(_order_stay(members, incoming))
-    for index, path in enumerate(ordered):
+        path.pop("resume", None)
+        path.pop("handoff", None)
+        path.pop("joined", None)
         path["order"] = index
-    return ordered
+    return list(paths)
 
 
 def expand_stay_chains(paths):
@@ -572,9 +571,11 @@ def expand_stay_chains(paths):
         del group[:]
 
     for path in paths:
-        if path.get("resume") and group:
+        if path.get("resume") and group and _same_color(group[-1], path):
             group.append(path)
         else:
+            if group and path.get("resume") and not _same_color(group[-1], path):
+                path["resume"] = False
             flush()
             group.append(path)
     flush()

@@ -33,7 +33,7 @@ def units(mm):
 
 def encode_job(paths, page_mm, origin_mm=(0, 0), accurate=True,
                blade_offset_mm=0.35, overcut_mm=0.0, turn_knife_mm=0.0,
-               alternate=False):
+               alternate=False, keep_laps=False):
     """Build the ASCII job CameraCut writes to the plotter.
 
     paths: dicts with holder, mode ('cut' or 'fold'), force, cut_speed,
@@ -79,7 +79,7 @@ def encode_job(paths, page_mm, origin_mm=(0, 0), accurate=True,
             stay_down=path.get("stay_down", None),
             resume=resume,
             handoff=bool(path.get("handoff")),
-        )))
+        ), keep_laps))
     parts.append("US%d; U0,0 @ " % PARK_TRAVEL)
     return "".join(parts)
 
@@ -550,13 +550,15 @@ def _preview_stroke(path, points):
     }
 
 
-def _decorate(path, text):
+def _decorate(path, text, keep_laps=False):
     boost = path.get("boost_speed")
     point_forces = path.get("point_forces")
     passes = int(path.get("passes", 1))
     lap_forces = _lap_forces(path, passes)
     varied = len(set(lap_forces)) > 1
     if not boost and not point_forces and not varied:
+        if keep_laps:
+            return text
         return text.replace(" LAP ", " ")
     src = path.get("points_mm") or []
     closed = bool(path.get("closed", True))
@@ -579,6 +581,8 @@ def _decorate(path, text):
             if wanted != force_state:
                 force_state = wanted
                 out.append("FS%d;" % force_state)
+            if keep_laps:
+                out.append("LAP")
             continue
         if len(token) < 4 or token[0] not in "UD":
             out.append(token)
@@ -776,7 +780,7 @@ def parse_job(text):
 
 
 _SENT_TOKEN = re.compile(
-    r"P[01];|FS\d+;|VS\d+;|US\d+;|U-?\d+,-?\d+|D-?\d+,-?\d+|@"
+    r"P[01];|FS\d+;|VS\d+;|US\d+;|U-?\d+,-?\d+|D-?\d+,-?\d+|LAP|@"
 )
 
 
@@ -889,15 +893,35 @@ def _xy(token):
 
 
 def sent_segments(payload, min_x, max_y):
-    """Knife-up travels and knife-down runs, in illustrator millimetres."""
-    tokens = [token for token in _SENT_TOKEN.findall(payload or "") if token[0] in "UD" and "," in token]
+    """Knife-up travels and knife-down runs, in illustrator millimetres.
+
+    A LAP marker starts the next pass without a lift. Each pass keeps the
+    force that was in effect when it began.
+    """
+    tokens = _SENT_TOKEN.findall(payload or "")
     segments = []
     travel = None
     down = None
     last = None
+    force = None
     # The head starts parked at machine 0,0, the drawing's top-left.
     origin = _ill_point("U0,0", min_x, max_y)
     for token in tokens:
+        if token == "LAP":
+            if down is not None and len(down["points"]) >= 2:
+                segments.append(down)
+                down = {
+                    "kind": "cut",
+                    "points": [down["points"][-1]],
+                    "force": force,
+                    "continues": True,
+                }
+            continue
+        if token.startswith("FS"):
+            force = int(token[2:-1])
+            continue
+        if token[0] not in "UD" or "," not in token:
+            continue
         point = _ill_point(token, min_x, max_y)
         if token[0] == "U":
             if down is not None:
@@ -913,7 +937,7 @@ def sent_segments(payload, min_x, max_y):
             segments.append({"kind": "travel", "points": travel})
         travel = None
         if down is None:
-            down = {"kind": "cut", "points": [point]}
+            down = {"kind": "cut", "points": [point], "force": force}
         elif down["points"][-1] != point:
             down["points"].append(point)
         last = point
