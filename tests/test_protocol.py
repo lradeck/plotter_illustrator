@@ -9,7 +9,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "plotter"))
 
 from pattern import SPEEDS, FORCES, build_test_pattern, encode_test_pattern
-from protocol import describe_sent, encode_job, fine_spans, parse_job, preview_strokes, speed_at, units
+from protocol import describe_sent, encode_job, fine_spans, parse_job, preview_strokes, units
 from send_job import job_from_document, sent_view
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "square_knife.job")
@@ -314,7 +314,7 @@ class PatternTest(unittest.TestCase):
         self.assertEqual(starts[0], (0, units(-30)))
         self.assertEqual(starts[1], (0, units(-10)))
 
-    def test_one_layer_is_cut_as_a_snake(self):
+    def test_one_layer_keeps_the_document_order(self):
         def square(x, y):
             return {
                 "holder": "left",
@@ -335,10 +335,10 @@ class PatternTest(unittest.TestCase):
         }
         starts = _cut_starts(job_from_document(document))
         self.assertEqual(starts, [
-            (0, 0),
-            (0, units(-15)),
             (units(-12), units(-15)),
+            (units(-10), units(-10)),
             (units(-12), units(-10)),
+            (units(-10), units(-15)),
         ])
 
     def test_pen_layer_is_drawn_from_the_top(self):
@@ -590,8 +590,10 @@ class ProfileTest(unittest.TestCase):
         # knife lifts before that plunge so the new force is the one used.
         corner = "D%d,%d" % (units(-10), units(-10))
         self.assertEqual(text.count(corner), 5)
-        self.assertEqual(text.count("FS13;"), 1)
+        self.assertEqual(text.count("FS13;"), 2)
         self.assertEqual(text.count("FS15;"), 1)
+        self.assertLess(text.index("FS13;"), text.index("FS15;"))
+        self.assertLess(text.index("FS15;"), text.index("FS13;", text.index("FS15;")))
         gap = text[text.index("FS15;"):]
         self.assertRegex(gap, r"FS15;VS\d+;US\d+;U-?\d+,-?\d+")
         view = sent_view({
@@ -603,9 +605,9 @@ class ProfileTest(unittest.TestCase):
             "blade_offset_mm": 0,
         })
         cuts = [segment for segment in view["segments"] if segment["kind"] == "cut"]
-        self.assertEqual([segment.get("force") for segment in cuts], [13, 13, 13, 13, 15])
-        self.assertTrue(cuts[1].get("continues"))
-        self.assertFalse(cuts[4].get("continues"))
+        self.assertEqual([segment.get("force") for segment in cuts], [13, 15, 13, 13, 13])
+        self.assertFalse(cuts[1].get("continues"))
+        self.assertTrue(cuts[3].get("continues"))
 
     def test_stay_down_joins_squares_that_share_a_corner(self):
         left = _path("left", "cut", 20, 10, 30, [[0, 0], [10, 0], [10, 10], [0, 10]])
@@ -651,9 +653,9 @@ class ProfileTest(unittest.TestCase):
             "blade_offset_mm": 0,
         })
         ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
-        self.assertEqual(len(ups), 5)
-        self.assertEqual(text.count("VS1;"), 2)
-        self.assertEqual(text.count("VS10;"), 2)
+        self.assertEqual(len(ups), 17)
+        self.assertEqual(text.count("VS1;"), 8)
+        self.assertEqual(text.count("VS10;"), 8)
 
     def test_separate_paths_still_lift_when_stay_down_is_off(self):
         first = _path("left", "cut", 20, 10, 30, [[0, 0], [10, 0]])
@@ -680,8 +682,9 @@ class ProfileTest(unittest.TestCase):
         path["stay_down"] = True
         text = encode_job([path], (100, 100), accurate=False, turn_knife_mm=0)
         ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
-        self.assertEqual(ups.count(("200", "200")), 1)
-        self.assertEqual(len(ups), 2)
+        self.assertEqual(ups.count(("200", "200")), 3)
+        self.assertEqual(len(ups), 4)
+        self.assertNotIn("D1000,200 D200,200", text)
 
     def test_closed_passes_stay_down_without_a_second_segment(self):
         path = _path("left", "cut", 20, 10, 30, [[10, 10], [30, 10], [30, 30], [10, 30]])
@@ -717,9 +720,9 @@ class ProfileTest(unittest.TestCase):
             "blade_offset_mm": 0,
         })
         ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
-        self.assertEqual(len(ups), 5)
-        self.assertEqual(text.count("FS1;"), 2)
-        self.assertEqual(text.count("FS14;"), 2)
+        self.assertEqual(len(ups), 17)
+        self.assertEqual(text.count("FS1;"), 8)
+        self.assertEqual(text.count("FS14;"), 8)
         self.assertIsNone(re.search(r"FS1;VS1;D", text))
 
     def test_each_pass_can_use_its_own_force(self):
@@ -730,25 +733,34 @@ class ProfileTest(unittest.TestCase):
         path["forces"] = [10, 40]
         text = encode_job([path], (100, 100), accurate=False, turn_knife_mm=0)
         self.assertIn("FS10;", text)
-        self.assertIn("FS40;", text)
+        self.assertIn("FS40; U0,0 D0,0 D800,0", text)
+        self.assertNotIn("D800,0 D0,0", text)
 
-    def test_boost_slows_down_before_a_corner(self):
-        square = [[0, 0], [100, 0], [100, 100], [0, 100]]
-        mid = speed_at(square, (50, 0), 20, 200, 25, 8, True)
-        near = speed_at(square, (2, 0), 20, 200, 25, 8, True)
-        after = speed_at(square, (100, 2), 20, 200, 25, 8, True)
-        self.assertGreater(mid, 150)
-        self.assertLess(near, mid)
-        self.assertLess(after, mid)
-        path = _path("left", "cut", 20, 20, 30, square)
+    def test_speed_change_without_a_new_force_stays_down(self):
+        path = _path("left", "cut", 10, 10, 30, [[0, 0], [20, 0], [20, 20], [0, 20]])
+        path["passes"] = 2
         path["closed"] = True
-        path["passes"] = 1
-        path["boost_speed"] = 200
-        path["detail_deg"] = 25
-        path["ramp_mm"] = 8
-        text = encode_job([path], (200, 200), accurate=False, turn_knife_mm=0)
-        self.assertGreaterEqual(text.count("VS"), 2)
-        self.assertIn("VS", text.split("D", 1)[1])
+        path["stay_down"] = True
+        path["speeds"] = [10, 30]
+        text = encode_job([path], (100, 100), accurate=False, turn_knife_mm=0)
+        ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
+        self.assertEqual(len(ups), 2)
+        self.assertIn("VS30;", text)
+
+    def test_closed_force_change_lifts_only_at_that_pass(self):
+        path = _path("left", "cut", 13, 2, 200, [[0, 0], [20, 0], [20, 20], [0, 20]])
+        path["passes"] = 5
+        path["closed"] = True
+        path["stay_down"] = True
+        path["forces"] = [13, 13, 13, 13, 15]
+        path["speeds"] = [2, 2, 2, 2, 2]
+        path["travels"] = [200, 200, 200, 200, 200]
+        text = encode_job([path], (100, 100), accurate=False, turn_knife_mm=0)
+        ups = re.findall(r"(?:^|[\s;])U(-?\d+),(-?\d+)", text)
+        self.assertEqual(len(ups), 4)
+        self.assertEqual(text.count("FS13;"), 1)
+        self.assertEqual(text.count("FS15;"), 1)
+        self.assertIn("FS15; U", text)
 
     def test_fine_area_marks_both_cutover_legs(self):
         points = [(-30, 0), (-6, 0), (0, 0), (-6, 1), (-30, 1)]

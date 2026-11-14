@@ -8,6 +8,7 @@ var CONNECTION_FILE = "C:/Users/Leon/Downloads/doublecut/connection.json";
 var LOG_FILE = "C:/Users/Leon/Downloads/doublecut/panel.log";
 var MATERIALS_FILE = "C:/Users/Leon/Downloads/doublecut/materials.yaml";
 var HISTORY_FILE = "C:/Users/Leon/Downloads/doublecut/history.json";
+var NOTES_FILE = "C:/Users/Leon/Downloads/doublecut/notes.json";
 var SQUARE_FIELDS = [
     "force-min", "force-max", "force-step",
     "speed-min", "speed-max", "speed-step",
@@ -93,7 +94,7 @@ function setStayChecked(id, on) {
 }
 
 function numberValue(id, fallback) {
-    var n = parseFloat(document.getElementById(id).value);
+    var n = parseFloat(String(document.getElementById(id).value).replace(",", "."));
     return isNaN(n) ? fallback : n;
 }
 
@@ -200,14 +201,21 @@ function selectedConfigName() {
 
 function materialFromEditor() {
     var mode = document.getElementById("cfg-mode").value;
+    var laps = readLaps("cfg-").map(function (lap) {
+        var rounded = roundLap(lap);
+        return { force: String(rounded.force), speed: String(rounded.speed), travel: String(rounded.travel) };
+    });
+    var first = laps[0];
     return {
         holder: document.getElementById("cfg-holder").value,
-        force: document.getElementById("cfg-force").value,
-        speed: document.getElementById("cfg-speed").value,
-        "travel-set": document.getElementById("cfg-travel-set").value,
-        passes: document.getElementById("cfg-passes").value,
+        force: first.force,
+        speed: first.speed,
+        "travel-set": first.travel,
+        passes: String(laps.length),
+        laps: laps,
         depth: document.getElementById("cfg-depth").value,
         offset: offsetText("cfg-offset"),
+        angle: document.getElementById("cfg-angle").value,
         mode: mode,
         stay: stayChecked("cfg-stay") ? "1" : "0"
     };
@@ -226,53 +234,166 @@ function passCount(id) {
     return n;
 }
 
-function forceBox(prefix) {
-    return document.getElementById(prefix ? "cfg-pass-forces" : "pass-forces");
+function passFieldId(prefix, kind, index) {
+    var base = kind === "travel"
+        ? (index === 1 ? "travel-set" : "travel-" + index)
+        : (index === 1 ? kind : kind + "-" + index);
+    return prefix ? "cfg-" + base : base;
 }
 
-function forceInputId(prefix, index) {
-    return (prefix ? "cfg-force" : "force") + (index === 1 ? "" : "-" + index);
-}
-
-function renderPassForces(prefix) {
-    var box = forceBox(prefix);
-    var first = document.getElementById(forceInputId(prefix, 1));
-    if (!box || !first) return;
+function readLaps(prefix) {
     var count = passCount(prefix ? prefix + "passes" : "passes");
-    var kept = readPassForces(prefix);
-    box.innerHTML = "";
-    var i, row, input;
-    for (i = 2; i <= count; i++) {
-        row = document.createElement("label");
-        row.textContent = "Pass " + i + " ";
-        input = document.createElement("input");
-        input.id = forceInputId(prefix, i);
-        input.value = kept[i - 1] ? kept[i - 1] : document.getElementById(forceInputId(prefix, 1)).value;
-        input.addEventListener("input", markDirty);
-        row.appendChild(input);
-        box.appendChild(row);
-    }
-}
-
-function readPassForces(prefix) {
-    var count = passCount(prefix ? prefix + "passes" : "passes");
-    var out = [];
-    var i, el;
+    var laps = [];
+    var i, forceEl, speedEl, travelEl, prev;
     for (i = 1; i <= count; i++) {
-        el = document.getElementById(forceInputId(prefix, i));
-        out.push(el ? el.value : "");
+        forceEl = document.getElementById(passFieldId(prefix, "force", i));
+        speedEl = document.getElementById(passFieldId(prefix, "speed", i));
+        travelEl = document.getElementById(passFieldId(prefix, "travel", i));
+        if (!forceEl || !speedEl || !travelEl) {
+            prev = laps.length ? laps[laps.length - 1] : { force: "20", speed: "20", travel: "20" };
+            laps.push({ force: prev.force, speed: prev.speed, travel: prev.travel });
+        } else {
+            laps.push({
+                force: String(forceEl.value).replace(",", "."),
+                speed: String(speedEl.value).replace(",", "."),
+                travel: String(travelEl.value).replace(",", ".")
+            });
+        }
     }
-    return out;
+    return laps;
 }
 
-function applyForceList(list, prefix) {
-    if (!list || !list.length) return;
-    var i, el;
-    document.getElementById(forceInputId(prefix, 1)).value = list[0];
-    for (i = 1; i < list.length; i++) {
-        el = document.getElementById(forceInputId(prefix, i + 1));
-        if (el) el.value = list[i];
+function bindPassInput(input, kind) {
+    input.addEventListener("input", scheduleColorApply);
+    input.addEventListener("blur", function () {
+        var note = kind === "speed" ? fractionNote(input.id, "Speed") : (kind === "travel" ? fractionNote(input.id, "Travel speed") : "");
+        var n = numberValue(input.id, NaN);
+        if (!isNaN(n)) input.value = String(Math.round(n));
+        flushColorApply();
+        if (note) setStatus(note);
+    });
+}
+
+function passCard(prefix, index, lap) {
+    var card = document.createElement("div");
+    var title = document.createElement("div");
+    var kinds = [["force", "Force"], ["speed", "Speed"], ["travel", "Travel speed"]];
+    var i, label, input, kind, fallback;
+    card.className = "pass-card";
+    title.className = "pass-title";
+    title.textContent = "Pass " + index;
+    card.appendChild(title);
+    fallback = lap || { force: "20", speed: "20", travel: "20" };
+    for (i = 0; i < kinds.length; i++) {
+        kind = kinds[i][0];
+        label = document.createElement("label");
+        input = document.createElement("input");
+        input.id = passFieldId(prefix, kind, index);
+        input.className = "pass-field";
+        input.value = fallback[kind] != null ? fallback[kind] : "";
+        label.setAttribute("for", input.id);
+        label.textContent = kinds[i][1];
+        if (!prefix) bindPassInput(input, kind);
+        card.appendChild(label);
+        card.appendChild(input);
     }
+    return card;
+}
+
+function renderPassRows(prefix) {
+    var box = document.getElementById(prefix ? "cfg-pass-rows" : "pass-rows");
+    if (!box) return;
+    var count = passCount(prefix ? prefix + "passes" : "passes");
+    var kept = readLaps(prefix);
+    var i;
+    box.innerHTML = "";
+    for (i = 2; i <= count; i++) box.appendChild(passCard(prefix, i, kept[i - 1] || kept[kept.length - 1]));
+}
+
+function applyLaps(list, prefix) {
+    var passesId = prefix ? "cfg-passes" : "passes";
+    var i, lap;
+    if (!list || !list.length) {
+        renderPassRows(prefix);
+        return;
+    }
+    document.getElementById(passesId).value = String(list.length);
+    document.getElementById(passFieldId(prefix, "force", 1)).value = list[0].force;
+    document.getElementById(passFieldId(prefix, "speed", 1)).value = list[0].speed;
+    document.getElementById(passFieldId(prefix, "travel", 1)).value = list[0].travel;
+    renderPassRows(prefix);
+    for (i = 1; i < list.length; i++) {
+        lap = list[i];
+        if (document.getElementById(passFieldId(prefix, "force", i + 1))) {
+            document.getElementById(passFieldId(prefix, "force", i + 1)).value = lap.force;
+            document.getElementById(passFieldId(prefix, "speed", i + 1)).value = lap.speed;
+            document.getElementById(passFieldId(prefix, "travel", i + 1)).value = lap.travel;
+        }
+    }
+}
+
+function roundLap(lap) {
+    var force = Math.round(parseFloat(lap.force));
+    var speed = Math.round(parseFloat(lap.speed));
+    var travel = Math.round(parseFloat(lap.travel));
+    return {
+        force: isNaN(force) ? 20 : force,
+        speed: isNaN(speed) ? 20 : speed,
+        travel: isNaN(travel) ? 20 : travel
+    };
+}
+
+function lapsFromColor(color) {
+    var count = Math.round(color.passes);
+    var laps = [];
+    var i, source;
+    if (isNaN(count) || count < 1) count = 1;
+    if (color.laps && color.laps.length) source = color.laps;
+    else source = null;
+    for (i = 0; i < count; i++) {
+        if (source) {
+            laps.push(source[Math.min(i, source.length - 1)]);
+        } else {
+            laps.push({
+                force: color.forces && color.forces.length > i && color.forces[i] != null ? color.forces[i] : color.force,
+                speed: color.speeds && color.speeds.length > i && color.speeds[i] != null ? color.speeds[i] : color.speed,
+                travel: color.travels && color.travels.length > i && color.travels[i] != null ? color.travels[i] : color.travel
+            });
+        }
+    }
+    return laps;
+}
+
+function lapSpec(laps) {
+    return lapRuns(laps).map(function (run) {
+        return run.force + ":" + run.speed + ":" + run.travel + " x" + run.count;
+    }).join(", ");
+}
+
+function parseLapSpec(text) {
+    var parts = String(text).split(",");
+    var laps = [];
+    var i, match, count, k;
+    for (i = 0; i < parts.length; i++) {
+        match = parts[i].match(/(\d+(?:[.,]\d+)?)\s*:\s*(\d+(?:[.,]\d+)?)\s*:\s*(\d+(?:[.,]\d+)?)(?:\s*x\s*(\d+))?/);
+        if (!match) continue;
+        count = match[4] ? parseInt(match[4], 10) : 1;
+        if (isNaN(count) || count < 1) count = 1;
+        for (k = 0; k < count; k++) laps.push({ force: match[1], speed: match[2], travel: match[3] });
+    }
+    return laps;
+}
+
+function lapRuns(laps) {
+    var runs = [];
+    var i, last, lap;
+    for (i = 0; i < laps.length; i++) {
+        lap = roundLap(laps[i]);
+        last = runs[runs.length - 1];
+        if (last && last.force === lap.force && last.speed === lap.speed && last.travel === lap.travel) last.count += 1;
+        else runs.push({ force: lap.force, speed: lap.speed, travel: lap.travel, count: 1 });
+    }
+    return runs;
 }
 
 function markDirty() {
@@ -305,8 +426,7 @@ function copyEditor(toWorking) {
     syncAngleFrom("offset", "angle");
     syncAngleFrom("cfg-offset", "cfg-angle");
     setStayChecked(toWorking ? "stay" : "cfg-stay", stayChecked(toWorking ? "cfg-stay" : "stay"));
-    renderPassForces("");
-    renderPassForces("cfg-");
+    applyLaps(readLaps(toWorking ? "cfg-" : ""), toWorking ? "" : "cfg-");
 }
 
 function applySquareConfig(values) {
@@ -371,22 +491,34 @@ function fillColorFields(values, prefix) {
     var holder = firstValue(values, ["holder"]);
     var depth = firstValue(values, ["depth"]);
     var offset = firstValue(values, ["offset"]);
-    var travelId = prefix ? prefix + "travel-set" : "travel-set";
-    var passesId = prefix ? prefix + "passes" : "passes";
     var modeId = prefix ? prefix + "mode" : "mode";
     var holderId = prefix ? prefix + "holder" : "holder";
     var depthId = prefix ? prefix + "depth" : "depth";
     var offsetId = prefix ? prefix + "offset" : "offset";
-    var forceId = prefix ? "cfg-force" : "force";
-    var speedId = prefix ? "cfg-speed" : "speed";
-    document.getElementById(forceId).value = force != null ? force : 20;
-    document.getElementById(speedId).value = speed != null ? speed : 20;
-    document.getElementById(travelId).value = travel != null ? travel : 20;
-    document.getElementById(passesId).value = passes != null ? passes : 1;
+    var angleId = prefix ? "cfg-angle" : "angle";
+    var laps = values.laps;
+    var i, count;
     document.getElementById(depthId).value = depth != null ? depth : 0;
     document.getElementById(offsetId).value = offset != null ? offset : 0.35;
     setStayChecked(prefix ? "cfg-stay" : "stay", !(values.stay === false || values.stay === "0" || values.stay === 0));
-    syncAngleFrom(offsetId, offsetId === "cfg-offset" ? "cfg-angle" : "angle");
+    if (values.angle === "30" || values.angle === "45" || values.angle === "60" || values.angle === 30 || values.angle === 45 || values.angle === 60) {
+        document.getElementById(angleId).value = String(values.angle);
+    } else {
+        syncAngleFrom(offsetId, angleId);
+    }
+    if (!laps || !laps.length) {
+        count = parseInt(passes, 10);
+        if (isNaN(count) || count < 1) count = 1;
+        laps = [];
+        for (i = 0; i < count; i++) {
+            laps.push({
+                force: force != null ? force : 20,
+                speed: speed != null ? speed : 20,
+                travel: travel != null ? travel : 20
+            });
+        }
+    }
+    applyLaps(laps, prefix);
     document.getElementById(modeId).value = mode === "pen" || mode === "fold" ? mode : "cut";
     document.getElementById(holderId).value = holder === "right" ? "right" : "left";
 }
@@ -404,10 +536,12 @@ function loadColorConfig() {
     fillColorFields(configs[index].values, "");
     if (selected >= 0 && colors[selected]) {
         fieldsDirty = true;
-        readFields(true);
-        saveLibrary();
+        applySelectedColor(function (msg) {
+            if (msg === "nodoc") setStatus("Kein Dokument offen.");
+            else if (msg && msg.indexOf("ok") === 0) setStatus(name + " geladen.");
+            else if (msg) setStatus(msg);
+        });
     }
-    fieldsDirty = false;
     logLine("load color " + name + " F" + document.getElementById("force").value + " S" + document.getElementById("speed").value);
 }
 
@@ -509,6 +643,7 @@ function exportMaterials() {
         lines.push("  speed: " + yamlScalar(values.speed));
         lines.push("  travel_speed: " + yamlScalar(travel));
         lines.push("  passes: " + yamlScalar(values.passes));
+        if (values.laps && values.laps.length) lines.push("  laps: " + yamlScalar(lapSpec(values.laps)));
         lines.push("  cut_depth: " + yamlScalar(depth));
         lines.push("  offset: " + yamlScalar(values.offset != null ? values.offset : 0.35));
         lines.push("  mode: " + yamlScalar(values.mode || "cut"));
@@ -547,6 +682,8 @@ function importMaterials() {
         else if (item.speed_straight != null) values.speed = item.speed_straight;
         if (item.travel_speed != null) values["travel-set"] = item.travel_speed;
         if (item.passes != null) values.passes = item.passes;
+        if (item.laps) values.laps = parseLapSpec(item.laps);
+        if (item.angle === "30" || item.angle === "45" || item.angle === "60") values.angle = item.angle;
         if (item.cut_depth != null) values.depth = item.cut_depth;
         if (item.offset != null) values.offset = item.offset;
         if (item.mode === "pen" || item.mode === "fold" || item.mode === "cut") values.mode = item.mode;
@@ -621,7 +758,10 @@ function defaultColor(rgb) {
         offset: 0.35,
         mode: "cut",
         stay: true,
-        forces: null
+        forces: null,
+        speeds: null,
+        travels: null,
+        laps: null
     };
 }
 
@@ -659,8 +799,10 @@ function mergeFound(found) {
             color.mode = found[i].mode === "pen" || found[i].mode === "fold" ? found[i].mode : "cut";
             if (typeof found[i].depth === "number") color.depth = found[i].depth;
             if (found[i].forces) color.forces = found[i].forces;
+            if (found[i].speeds) color.speeds = found[i].speeds;
+            if (found[i].travels) color.travels = found[i].travels;
+            color.laps = null;
             if (found[i].stay === true || found[i].stay === false) color.stay = found[i].stay;
-            if (typeof found[i].boost === "number") color.boost = found[i].boost;
         }
         colors.push(color);
     }
@@ -676,12 +818,17 @@ function readFields(forceWrite) {
     if (!forceWrite && !fieldsDirty) return;
     if (selected < 0 || !colors[selected]) return;
     var color = colors[selected];
-    color.passes = numberValue("passes", color.passes);
-    if (color.passes < 1) color.passes = 1;
-    color.force = numberValue("force", color.force);
-    color.speed = numberValue("speed", color.speed);
-    color.forces = null;
-    color.travel = numberValue("travel-set", color.travel);
+    var laps = readLaps("").map(roundLap);
+    laps[0].force = Math.round(numberValue("force", laps[0].force));
+    color.passes = laps.length;
+    color.laps = laps;
+    color.force = laps[0].force;
+    color.speed = laps[0].speed;
+    color.travel = laps[0].travel;
+    color.forces = laps.map(function (lap) { return lap.force; });
+    color.speeds = laps.map(function (lap) { return lap.speed; });
+    color.travels = laps.map(function (lap) { return lap.travel; });
+    color.angle = document.getElementById("angle").value;
     color.depth = numberValue("depth", color.depth);
     color.offset = offsetText("offset");
     color.mode = document.getElementById("mode").value;
@@ -692,13 +839,11 @@ function readFields(forceWrite) {
 }
 
 function showFields(color) {
-    document.getElementById("force").value = color.force;
-    document.getElementById("speed").value = color.speed;
-    document.getElementById("travel-set").value = color.travel;
-    document.getElementById("passes").value = color.passes;
+    applyLaps(lapsFromColor(color), "");
     document.getElementById("depth").value = color.depth == null ? 0 : color.depth;
     document.getElementById("offset").value = color.offset == null ? 0.35 : color.offset;
-    syncAngleFrom("offset", "angle");
+    if (color.angle === "30" || color.angle === "45" || color.angle === "60") document.getElementById("angle").value = color.angle;
+    else syncAngleFrom("offset", "angle");
     document.getElementById("holder").value = color.holder === "right" ? "right" : "left";
     document.getElementById("mode").value = color.mode === "pen" || color.mode === "fold" ? color.mode : "cut";
     setStayChecked("stay", color.stay !== false);
@@ -732,13 +877,11 @@ function renderList() {
 }
 
 function qualifiedLayerName(color) {
-    var force = Math.round(color.force);
-    var speed = Math.round(color.speed);
-    var travel = Math.round(color.travel);
-    var passes = Math.round(color.passes);
+    var runs = lapRuns(lapsFromColor(color));
     var side = color.holder === "right" ? "Right" : "Left";
-    if (passes < 1) passes = 1;
-    var body = "F" + force + " S" + speed + " T" + travel + " x" + passes
+    var body = runs.map(function (run) {
+        return "F" + run.force + " S" + run.speed + " T" + run.travel + " x" + run.count;
+    }).join(" ")
         + " O" + formatOffset(color.offset) + " D" + formatOffset(color.depth)
         + " Z" + (color.stay === false ? "0" : "1");
     if (color.mode === "pen") return side + " Stift " + body;
@@ -755,9 +898,12 @@ function formatOffset(value) {
 }
 
 function onPick(event) {
-    readFields();
-    selected = parseInt(event.currentTarget.getAttribute("data-index"), 10);
-    renderList();
+    var next = parseInt(event.currentTarget.getAttribute("data-index"), 10);
+    if (next === selected) return;
+    commitColorSettings(function () {
+        selected = next;
+        renderList();
+    });
 }
 
 function refreshColors(done) {
@@ -846,7 +992,7 @@ function startSquares() {
 function sendJob() {
     var jobPath = tempPath("plotter_job.json");
     var marked = document.getElementById("marked").checked;
-    var call = "collectJob(" + jsString(jobPath) + ",0.35,1," + (marked ? "true" : "false") + "," + jsString(COLORS_FILE) + ")";
+    var call = "collectJob(" + jsString(jobPath) + ",0.35," + turnMm() + "," + (marked ? "true" : "false") + "," + jsString(COLORS_FILE) + ")";
     evalHost(call, function (msg) {
         if (msg === "nodoc") {
             setBusy(false);
@@ -884,9 +1030,18 @@ function sendJob() {
 
 function plot() {
     if (busy) return;
-    readFields();
-    saveLibrary();
-    setBusy(true);
+    commitColorSettings(function (msg) {
+        if (msg === "nodoc") {
+            setStatus("Kein Dokument offen.");
+            return;
+        }
+        if (msg && msg.indexOf("ok") !== 0 && msg !== "Keine Strichfarbe gewaehlt.") {
+            setStatus(msg);
+            return;
+        }
+        readFields();
+        saveLibrary();
+        setBusy(true);
     setStatus("Sende...");
     refreshColors(function (added, err) {
         if (err === "nodoc") {
@@ -905,6 +1060,7 @@ function plot() {
             return;
         }
         sendJob();
+    });
     });
 }
 
@@ -939,7 +1095,7 @@ function loadConnection() {
     if (!data) return;
     for (id in data) {
         if (!data.hasOwnProperty(id) || data[id] == null) continue;
-        if (id === "stay" || id === "cfg-stay") {
+        if (id === "stay" || id === "cfg-stay" || id === "align") {
             setStayChecked(id, data[id] === "1" || data[id] === true);
         } else if (id === "marked" || id === "axis-titles" || id === "connect-loops") {
             var box = document.getElementById(id);
@@ -950,14 +1106,23 @@ function loadConnection() {
     }
 }
 
-function saveConnection() {
+function turnMm() {
+    return stayChecked("align") ? 1 : 0;
+}
+
+function writeConnection() {
     var fs = nodeRequire("fs");
     var data = {
         host: document.getElementById("host").value,
         port: document.getElementById("port").value,
-        marked: document.getElementById("marked").checked ? "1" : "0"
+        marked: document.getElementById("marked").checked ? "1" : "0",
+        align: stayChecked("align") ? "1" : "0"
     };
     fs.writeFileSync(CONNECTION_FILE, JSON.stringify(data, null, 2));
+}
+
+function saveConnection() {
+    writeConnection();
     setStatus("Verbindung gespeichert.");
     closeSheet("settings-sheet");
 }
@@ -982,6 +1147,29 @@ function loadHistory() {
 function saveHistory() {
     var fs = nodeRequire("fs");
     fs.writeFileSync(HISTORY_FILE, JSON.stringify(plotJobs, null, 2));
+}
+
+function loadNotes() {
+    var fs = nodeRequire("fs");
+    var box = document.getElementById("notes-text");
+    if (!box) return;
+    if (!fs.existsSync(NOTES_FILE)) {
+        box.value = "";
+        return;
+    }
+    try {
+        var data = JSON.parse(fs.readFileSync(NOTES_FILE, "utf8"));
+        box.value = data && typeof data.text === "string" ? data.text : "";
+    } catch (eNotes) {
+        logLine("notes load ERR " + (eNotes && eNotes.message ? eNotes.message : eNotes));
+        box.value = "";
+    }
+}
+
+function saveNotes() {
+    var fs = nodeRequire("fs");
+    var box = document.getElementById("notes-text");
+    fs.writeFileSync(NOTES_FILE, JSON.stringify({ text: box ? box.value : "" }, null, 2));
 }
 
 function rememberJob(jobPath, host, port, count) {
@@ -1108,7 +1296,7 @@ function jobText(entry) {
     var i, path;
     for (i = 0; i < paths.length; i++) {
         path = paths[i];
-        lines.push((path.layer || path.mode || "Pfad") + "  " + (path.holder || "") + "  F" + (path.forces ? path.forces.join("/") : path.force) + "  S" + path.cut_speed + "  T" + path.travel_speed + "  x" + path.passes + (path.blade_offset_mm != null ? "  O" + path.blade_offset_mm : "") + (path.cut_depth != null ? "  D" + path.cut_depth : "") + (path.stay_down === false ? "  abheben" : "  zusammenhaengend") + (path.boost_speed ? "  Boost " + path.boost_speed : ""));
+        lines.push((path.layer || path.mode || "Pfad") + "  " + (path.holder || "") + "  F" + (path.forces ? path.forces.join("/") : path.force) + "  S" + path.cut_speed + "  T" + path.travel_speed + "  x" + path.passes + (path.blade_offset_mm != null ? "  O" + path.blade_offset_mm : "") + (path.cut_depth != null ? "  D" + path.cut_depth : "") + (path.stay_down === false ? "  abheben" : "  zusammenhaengend"));
     }
     return lines.join("\n");
 }
@@ -1150,10 +1338,18 @@ function applyHistoryTemplate() {
     }
     if (!first) first = entry.job.paths[0];
     if (first) {
-        document.getElementById("force").value = first.force;
-        document.getElementById("speed").value = first.cut_speed;
-        document.getElementById("travel-set").value = first.travel_speed;
-        document.getElementById("passes").value = first.passes;
+        var lapCount = parseInt(first.passes, 10);
+        var lapList = [];
+        var lapIndex;
+        if (isNaN(lapCount) || lapCount < 1) lapCount = 1;
+        for (lapIndex = 0; lapIndex < lapCount; lapIndex++) {
+            lapList.push({
+                force: first.forces && first.forces[lapIndex] != null ? first.forces[lapIndex] : first.force,
+                speed: first.speeds && first.speeds[lapIndex] != null ? first.speeds[lapIndex] : first.cut_speed,
+                travel: first.travels && first.travels[lapIndex] != null ? first.travels[lapIndex] : first.travel_speed
+            });
+        }
+        applyLaps(lapList, "");
         if (first.cut_depth != null) document.getElementById("depth").value = first.cut_depth;
         if (first.blade_offset_mm != null) document.getElementById("offset").value = first.blade_offset_mm;
         setStayChecked("stay", first.stay_down !== false);
@@ -1184,7 +1380,7 @@ function refreshSimulate() {
     readFields();
     saveLibrary();
     logLine("simulate refresh");
-    evalHost("collectJob(" + jsString(jobPath) + ",0.35,1," + (marked ? "true" : "false") + "," + jsString(COLORS_FILE) + ",true)", function (msg) {
+    evalHost("collectJob(" + jsString(jobPath) + ",0.35," + turnMm() + "," + (marked ? "true" : "false") + "," + jsString(COLORS_FILE) + ",true)", function (msg) {
         if (msg.indexOf("ok ") !== 0) {
             document.getElementById("sim-tip").textContent = msg === "nodoc" ? "Kein Dokument offen." : msg;
             return;
@@ -1755,7 +1951,16 @@ document.getElementById("settings-close").addEventListener("click", function () 
     closeSheet("settings-sheet");
 });
 document.getElementById("connection-save").addEventListener("click", saveConnection);
-document.getElementById("angle").addEventListener("change", function () { applyAngle("angle", "offset"); });
+document.getElementById("align").addEventListener("click", function () {
+    setStayChecked("align", !stayChecked("align"));
+    writeConnection();
+    setStatus(stayChecked("align") ? "1 mm Ausrichten: Ja" : "1 mm Ausrichten: Nein");
+});
+document.getElementById("angle").addEventListener("change", function () {
+    applyAngle("angle", "offset");
+    markDirty();
+    flushColorApply();
+});
 document.getElementById("cfg-angle").addEventListener("change", function () { applyAngle("cfg-angle", "cfg-offset"); });
 document.getElementById("offset").addEventListener("change", function () { syncAngleFrom("offset", "angle"); });
 document.getElementById("cfg-offset").addEventListener("change", function () { syncAngleFrom("cfg-offset", "cfg-angle"); });
@@ -1877,46 +2082,145 @@ document.getElementById("tool-ok").addEventListener("click", function () {
 });
 document.getElementById("color-load").addEventListener("click", loadColorConfig);
 document.getElementById("plot").addEventListener("click", plot);
-function applySelectedColor(done) {
+var colorSaveTimer = null;
+
+function colorNumberReady(id) {
+    var text = String(document.getElementById(id).value).replace(/^\s+|\s+$/g, "").replace(",", ".");
+    if (text === "" || /[.]$/.test(text)) return false;
+    return !isNaN(parseFloat(text));
+}
+
+function colorFieldsReady() {
+    var ids = ["passes", "force", "speed", "travel-set", "depth", "offset"];
+    var extra = document.querySelectorAll("#pass-rows input");
+    var i;
+    for (i = 0; i < ids.length; i++) {
+        if (!colorNumberReady(ids[i])) return false;
+    }
+    for (i = 0; i < extra.length; i++) {
+        if (!colorNumberReady(extra[i].id)) return false;
+    }
+    return true;
+}
+
+function colorFieldFocused() {
+    var el = document.activeElement;
+    if (!el || !el.id) return false;
+    if (el.className && String(el.className).indexOf("pass-field") >= 0) return true;
+    return el.id === "holder" || el.id === "passes" || el.id === "force" || el.id === "speed" || el.id === "travel-set" || el.id === "depth" || el.id === "offset" || el.id === "angle" || el.id === "stay";
+}
+
+function passFractionNote() {
+    var nodes = document.querySelectorAll("#pass-rows input, #speed, #travel-set");
+    var i, note;
+    for (i = 0; i < nodes.length; i++) {
+        if (nodes[i].id.indexOf("speed") === 0) note = fractionNote(nodes[i].id, "Speed");
+        else if (nodes[i].id.indexOf("travel") === 0) note = fractionNote(nodes[i].id, "Travel speed");
+        else continue;
+        if (note) return note;
+    }
+    return "";
+}
+
+function fractionNote(id, label) {
+    var n = parseFloat(String(document.getElementById(id).value).replace(",", "."));
+    if (isNaN(n) || Math.round(n) === n) return "";
+    return label + " geht nur in ganzen Zahlen an den Plotter. " + String(n).replace(".", ",") + " wird " + Math.round(n) + ".";
+}
+
+function updateColorCaption() {
+    var label;
+    if (selected < 0 || !colors[selected] || !listEl.children[selected]) return;
+    label = listEl.children[selected].querySelector("span");
+    if (label) label.textContent = caption(colors[selected]);
+}
+
+function applySelectedColor(done, skipRefresh) {
     var color, name;
+    if (colorSaveTimer) {
+        clearTimeout(colorSaveTimer);
+        colorSaveTimer = null;
+    }
     readFields(true);
     saveLibrary();
-    renderList();
     if (selected < 0 || !colors[selected]) {
         if (done) done("Keine Strichfarbe gewaehlt.");
         return;
     }
     color = colors[selected];
     name = qualifiedLayerName(color);
+    updateColorCaption();
     evalHost(
         "applyColorName(" + color.rgb[0] + "," + color.rgb[1] + "," + color.rgb[2] + "," + jsString(name) + ")",
         function (msg) {
             logLine("uebernehmen '" + name + "' -> " + msg);
-            refreshColors(function () {});
+            if (!skipRefresh && !fieldsDirty && !colorFieldFocused()) refreshColors(function () {});
             if (done) done(msg);
         }
     );
 }
 
-document.getElementById("apply").addEventListener("click", function () {
+function scheduleColorApply() {
+    markDirty();
+    if (colorSaveTimer) clearTimeout(colorSaveTimer);
+    colorSaveTimer = setTimeout(function () { flushColorApply(); }, 400);
+}
+
+function flushColorApply() {
+    var note;
+    colorSaveTimer = null;
+    if (!fieldsDirty || !colorFieldsReady() || selected < 0 || !colors[selected]) return;
+    note = passFractionNote();
     applySelectedColor(function (msg) {
         if (msg === "nodoc") setStatus("Kein Dokument offen.");
-        else if (msg === "ok 0") setStatus("Keine Pfade mit dieser Strichfarbe.");
-        else if (msg === "Keine Strichfarbe gewaehlt.") setStatus(msg);
-        else if (msg.indexOf("ok") !== 0) setStatus(msg);
+        else if (msg && msg.indexOf("ok") !== 0 && msg !== "Keine Strichfarbe gewaehlt.") setStatus(msg);
+        else if (note) setStatus(note);
     });
-});
+}
+
+function commitColorSettings(done) {
+    if (colorSaveTimer) {
+        clearTimeout(colorSaveTimer);
+        colorSaveTimer = null;
+    }
+    if (!(fieldsDirty && colorFieldsReady() && selected >= 0 && colors[selected])) {
+        if (done) done(null);
+        return;
+    }
+    applySelectedColor(function (msg) {
+        if (done) done(msg);
+    }, true);
+}
+
 document.getElementById("reread").addEventListener("click", function () {
     if (busy) return;
-    readFields();
-    refreshColors(function (added, err) {
-        if (err === "nodoc") setStatus("Kein Dokument offen.");
-        else if (err) setStatus(err);
+    commitColorSettings(function () {
+        refreshColors(function (added, err) {
+            if (err === "nodoc") setStatus("Kein Dokument offen.");
+            else if (err) setStatus(err);
+        });
     });
 });
 
-["holder", "passes", "force", "speed", "travel-set", "depth", "offset"].forEach(function (id) {
-    document.getElementById(id).addEventListener("input", markDirty);
+document.getElementById("passes").addEventListener("input", function () { renderPassRows(""); });
+document.getElementById("cfg-passes").addEventListener("input", function () { renderPassRows("cfg-"); });
+["passes", "force", "speed", "travel-set", "depth", "offset"].forEach(function (id) {
+    var el = document.getElementById(id);
+    el.addEventListener("input", scheduleColorApply);
+    el.addEventListener("blur", function () {
+        var note = id === "speed" ? fractionNote("speed", "Speed") : (id === "travel-set" ? fractionNote("travel-set", "Travel speed") : "");
+        var n;
+        if (id !== "depth" && id !== "offset") {
+            n = numberValue(id, NaN);
+            if (!isNaN(n)) el.value = String(Math.round(n));
+        }
+        flushColorApply();
+        if (note) setStatus(note);
+    });
+});
+document.getElementById("holder").addEventListener("change", function () {
+    markDirty();
+    flushColorApply();
 });
 document.getElementById("stay").addEventListener("click", function () {
     setStayChecked("stay", !stayChecked("stay"));
@@ -1930,6 +2234,11 @@ document.getElementById("cfg-stay").addEventListener("click", function () {
     setStayChecked("cfg-stay", !stayChecked("cfg-stay"));
 });
 document.getElementById("holder").addEventListener("change", markDirty);
+document.getElementById("notes").addEventListener("click", function () {
+    openSheet("notes-sheet");
+});
+document.getElementById("notes-close").addEventListener("click", function () { closeSheet("notes-sheet"); });
+document.getElementById("notes-text").addEventListener("input", saveNotes);
 document.getElementById("history-close").addEventListener("click", function () { closeSheet("history-sheet"); });
 document.getElementById("history-note").addEventListener("input", function () {
     var entry = findHistory(historyOpen);
@@ -1949,7 +2258,7 @@ document.getElementById("history-delete").addEventListener("click", function () 
 document.getElementById("history-template").addEventListener("click", applyHistoryTemplate);
 document.getElementById("simulate").addEventListener("click", function () {
     openSheet("simulate-sheet");
-    refreshSimulate();
+    commitColorSettings(function () { refreshSimulate(); });
 });
 document.getElementById("simulate-close").addEventListener("click", function () {
     simStopPlay();
@@ -2025,10 +2334,11 @@ if (!nodeRequire) {
     library = loadLibrary();
     configs = loadConfigs();
     loadConnection();
+    loadNotes();
     plotJobs = loadHistory();
     renderHistory();
-    renderPassForces("");
-    renderPassForces("cfg-");
+    renderPassRows("");
+    renderPassRows("cfg-");
     renderConfigs(configs.length ? configs[0].name : "");
     if (configs.length) loadEditorConfig();
     logLine("panel ready materials " + configs.length + " shown " + document.getElementById("color-config").options.length + " " + (selectedConfigName() || "none") + " history " + plotJobs.length);

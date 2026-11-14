@@ -67,7 +67,7 @@ def encode_job(paths, page_mm, origin_mm=(0, 0), accurate=True,
             raise ValueError("passes must be at least 1")
         resume = bool(path.get("resume")) and path.get("stay_down") is True and holder == path.get("holder")
         if resume:
-            parts.append("FS%d;VS%d;" % (_lap_forces(path, passes)[0], int(path["cut_speed"])))
+            parts.append("FS%d;VS%d;" % (_lap_forces(path, passes)[0], _lap_speeds(path, passes)[0]))
         else:
             parts.append(_tool_prefix(path))
         holder = path.get("holder")
@@ -94,8 +94,8 @@ def _tool_prefix(path):
     return "%sFS%d;VS%d;US%d;" % (
         HOLDERS[holder],
         _lap_forces(path, passes)[0],
-        int(path["cut_speed"]),
-        int(path["travel_speed"]),
+        _lap_speeds(path, passes)[0],
+        _lap_travels(path, passes)[0],
     )
 
 
@@ -103,25 +103,9 @@ def _moves(points, radius, overcut, turn, closed=True, passes=1, alternate=False
     if len(points) < 2:
         raise ValueError("a path needs at least two points")
     if not closed:
-        # A straight stroke has no corner, so the knife is not swung.
-        # Every pass starts with the knife up, unless the material says the
-        # passes stay down on a continuous path. Alternating still starts
-        # even passes at the other end and lifts between them.
+        # An open path stops at its last point. The next pass travels back
+        # to the start with the knife up, so the gap is not cut shut.
         commands = []
-        if stay_down is not None and not alternate:
-            begun = False
-            if not resume:
-                commands.append("U%d,%d" % points[0])
-                begun = True
-            for lap in range(passes):
-                if lap:
-                    commands.append("LAP")
-                for point in points:
-                    if not begun:
-                        begun = True
-                        continue
-                    commands.append("D%d,%d" % point)
-            return " ".join(commands) + " "
         for lap in range(passes):
             stroke = list(reversed(points)) if alternate and lap % 2 == 1 else points
             commands.append("U%d,%d" % stroke[0])
@@ -301,31 +285,6 @@ def _unit(dx, dy):
     if length < 1e-6:
         return None
     return (dx / length, dy / length)
-
-
-def speed_at(points, query, cut_speed, boost, detail_deg=25, ramp_mm=8, closed=True):
-    """Speed in mm/s at a point on the path.
-
-    Straight stretches use `boost`. Within `ramp_mm` of a corner or a tight
-    bend the speed eases down to `cut_speed` and back up afterwards.
-    """
-    cut_speed = float(cut_speed)
-    if not boost or float(boost) <= cut_speed or len(points) < 3:
-        return cut_speed
-    boost = float(boost)
-    detail_deg = float(detail_deg or 25)
-    ramp_mm = max(float(ramp_mm or 0), 0.0)
-    located = _locate(points, query, closed)
-    if located is None:
-        return cut_speed
-    dist = _detail_distance(points, located[0], detail_deg, closed)
-    if ramp_mm <= 0 or dist >= ramp_mm:
-        return boost if dist > 0 else cut_speed
-    if dist <= 0:
-        return cut_speed
-    t = dist / ramp_mm
-    smooth = t * t * (3.0 - 2.0 * t)
-    return cut_speed + (boost - cut_speed) * smooth
 
 
 def detail_flags(points, detail_deg=25, closed=True):
@@ -517,7 +476,6 @@ def _preview_stroke(path, points):
     cut = path.get("cut_speed", path.get("speed", 20))
     detail = path.get("detail_deg", 25)
     ramp = path.get("ramp_mm", 8)
-    boost = path.get("boost_speed")
     flags = detail_flags(points, detail, closed)
     point_forces = path.get("point_forces")
     loop = []
@@ -526,10 +484,8 @@ def _preview_stroke(path, points):
             loop.append(index < len(point_forces) and point_forces[index] is not None)
     speeds = []
     forces = []
-    for index, point in enumerate(points):
-        speeds.append(round(speed_at(
-            points, point, cut, boost, detail, ramp, closed
-        ), 2))
+    for index in range(len(points)):
+        speeds.append(round(float(cut), 2))
         special = None
         if point_forces and index < len(point_forces):
             special = point_forces[index]
@@ -551,24 +507,24 @@ def _preview_stroke(path, points):
 
 
 def _decorate(path, text, keep_laps=False):
-    boost = path.get("boost_speed")
     point_forces = path.get("point_forces")
     passes = int(path.get("passes", 1))
     lap_forces = _lap_forces(path, passes)
+    lap_speeds = _lap_speeds(path, passes)
+    lap_travels = _lap_travels(path, passes)
     varied = len(set(lap_forces)) > 1
-    if not boost and not point_forces and not varied:
+    if not point_forces and not varied and len(set(lap_speeds)) == 1 and len(set(lap_travels)) == 1:
         if keep_laps:
             return text
         return text.replace(" LAP ", " ")
     src = path.get("points_mm") or []
     closed = bool(path.get("closed", True))
-    cut = float(path.get("cut_speed", 20))
-    detail = path.get("detail_deg", 25)
-    ramp = path.get("ramp_mm", 8)
     tokens = text.split()
     out = []
-    speed_state = int(round(cut))
-    force_state = lap_forces[0]
+    # FS is applied on the next plunge, so a different force lifts before it.
+    force_state_box = [lap_forces[0]]
+    speed_state_box = [lap_speeds[0]]
+    travel_state_box = [lap_travels[0]]
     lap = 0
     down = False
     down_len = 0.0
@@ -577,10 +533,23 @@ def _decorate(path, text, keep_laps=False):
         if token == "LAP":
             if lap + 1 < len(lap_forces):
                 lap += 1
-            wanted = lap_forces[min(lap, len(lap_forces) - 1)]
-            if wanted != force_state:
-                force_state = wanted
-                out.append("FS%d;" % force_state)
+            index = min(lap, len(lap_forces) - 1)
+            force_changed = lap_forces[index] != force_state_box[0]
+            if force_changed and down and last is not None:
+                out.append("U%d,%d" % last)
+                down = False
+                down_len = 0.0
+            if lap_forces[index] != force_state_box[0]:
+                force_state_box[0] = lap_forces[index]
+                out.append("FS%d;" % force_state_box[0])
+            if lap_speeds[index] != speed_state_box[0]:
+                speed_state_box[0] = lap_speeds[index]
+                out.append("VS%d;" % speed_state_box[0])
+            if lap_travels[index] != travel_state_box[0]:
+                travel_state_box[0] = lap_travels[index]
+                out.append("US%d;" % travel_state_box[0])
+            if force_changed and last is not None:
+                out.append("U%d,%d" % last)
             if keep_laps:
                 out.append("LAP")
             continue
@@ -596,90 +565,58 @@ def _decorate(path, text, keep_laps=False):
             down = False
             down_len = 0.0
             last = None
-            if lap_forces[min(lap, len(lap_forces) - 1)] != force_state:
-                force_state = lap_forces[min(lap, len(lap_forces) - 1)]
-                out.append("FS%d;" % force_state)
+            index = min(lap, len(lap_forces) - 1)
+            if lap_forces[index] != force_state_box[0]:
+                force_state_box[0] = lap_forces[index]
+                out.append("FS%d;" % force_state_box[0])
+            if lap_speeds[index] != speed_state_box[0]:
+                speed_state_box[0] = lap_speeds[index]
+                out.append("VS%d;" % speed_state_box[0])
+            if lap_travels[index] != travel_state_box[0]:
+                travel_state_box[0] = lap_travels[index]
+                out.append("US%d;" % travel_state_box[0])
         else:
-            # The plotter keeps the current speed until the next point.
-            # A long straight side is one move, so the fast middle never
-            # happens unless that move is split into samples. The knife stays
-            # down; the samples are still one path.
-            targets = [(x, y)]
-            if last is not None and boost and len(src) >= 2:
-                gap = math.hypot(x - last[0], y - last[1])
-                pieces = int(gap / (2.0 * UNITS_PER_MM))
-                if pieces > 1:
-                    targets = []
-                    for step in range(1, pieces + 1):
-                        portion = step / float(pieces)
-                        targets.append((
-                            int(round(last[0] + (x - last[0]) * portion)),
-                            int(round(last[1] + (y - last[1]) * portion)),
-                        ))
-                    if targets[-1] != (x, y):
-                        targets.append((x, y))
-            for tx, ty in targets:
-                if last is not None:
-                    down_len += math.hypot(tx - last[0], ty - last[1]) / float(UNITS_PER_MM)
-                last = (tx, ty)
-                down = True
-                mm = (tx / float(UNITS_PER_MM), ty / float(UNITS_PER_MM))
-                if boost and len(src) >= 2:
-                    spd = int(round(speed_at(src, mm, cut, boost, detail, ramp, closed)))
-                    if spd != speed_state:
-                        out.append("VS%d;" % spd)
-                        speed_state = spd
-                wanted = force_state
-                if point_forces:
-                    special = force_on_segment(src, mm, point_forces, closed)
-                    wanted = special if special is not None else lap_forces[min(lap, len(lap_forces) - 1)]
-                elif varied:
-                    wanted = lap_forces[min(lap, len(lap_forces) - 1)]
-                if wanted != force_state:
-                    force_state = wanted
-                    out.append("FS%d;" % force_state)
-                out.append("D%d,%d" % (tx, ty))
+            if last is not None:
+                down_len += math.hypot(x - last[0], y - last[1]) / float(UNITS_PER_MM)
+            last = (x, y)
+            down = True
+            mm = (x / float(UNITS_PER_MM), y / float(UNITS_PER_MM))
+            wanted = force_state_box[0]
+            if point_forces:
+                special = force_on_segment(src, mm, point_forces, closed)
+                wanted = special if special is not None else lap_forces[min(lap, len(lap_forces) - 1)]
+            elif varied:
+                wanted = lap_forces[min(lap, len(lap_forces) - 1)]
+            if wanted != force_state_box[0]:
+                force_state_box[0] = wanted
+                out.append("FS%d;" % force_state_box[0])
+            out.append("D%d,%d" % (x, y))
             continue
         out.append(token)
     return " ".join(out) + " "
 
 
-def _lap_forces(path, passes):
-    raw = path.get("forces")
+def _lap_list(path, key, fallback, passes, default):
+    raw = path.get(key)
     if isinstance(raw, (list, tuple)) and raw:
-        forces = [int(round(float(value))) for value in raw]
+        values = [int(round(float(value))) for value in raw]
     else:
-        forces = [int(round(float(path.get("force", 20))))]
-    if len(forces) < passes:
-        forces.extend([forces[-1]] * (passes - len(forces)))
-    return forces[:passes]
+        values = [int(round(float(path.get(fallback, default))))]
+    if len(values) < passes:
+        values.extend([values[-1]] * (passes - len(values)))
+    return values[:passes]
 
 
-def _detail_distance(points, arc_pos, detail_deg, closed):
-    flags = detail_flags(points, detail_deg, closed)
-    lengths = _segment_lengths(points, closed)
-    total = sum(lengths)
-    if total <= 0:
-        return 0.0
-    marks = []
-    walked = 0.0
-    for index, flag in enumerate(flags):
-        if flag:
-            marks.append(walked)
-        if index < len(lengths):
-            walked += lengths[index]
-    if not marks:
-        return total
-    best = total
-    for mark in marks:
-        if closed:
-            gap = abs(arc_pos - mark)
-            gap = min(gap, total - gap)
-        else:
-            gap = abs(arc_pos - mark)
-        if gap < best:
-            best = gap
-    return best
+def _lap_forces(path, passes):
+    return _lap_list(path, "forces", "force", passes, 20)
+
+
+def _lap_speeds(path, passes):
+    return _lap_list(path, "speeds", "cut_speed", passes, 20)
+
+
+def _lap_travels(path, passes):
+    return _lap_list(path, "travels", "travel_speed", passes, 20)
 
 
 def _locate(points, query, closed):

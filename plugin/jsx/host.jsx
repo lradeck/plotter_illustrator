@@ -96,6 +96,8 @@ function copyNamed(entry, named) {
     entry.holder = named.holder;
     entry.mode = named.mode || "cut";
     if (named.forces) entry.forces = named.forces;
+    if (named.speeds) entry.speeds = named.speeds;
+    if (named.travels) entry.travels = named.travels;
     if (typeof named.offset === "number") entry.offset = named.offset;
     if (typeof named.depth === "number") entry.depth = named.depth;
     if (named.stay === true || named.stay === false) entry.stay = named.stay;
@@ -191,6 +193,8 @@ function blankNamed() {
     return {
         force: null,
         forces: null,
+        speeds: null,
+        travels: null,
         speed: null,
         travel: null,
         passes: null,
@@ -219,6 +223,8 @@ function copyIfMissing(named, extra) {
     if (!extra) return;
     if (named.force === null && extra.force !== null) named.force = extra.force;
     if (!named.forces && extra.forces) named.forces = extra.forces;
+    if (!named.speeds && extra.speeds) named.speeds = extra.speeds;
+    if (!named.travels && extra.travels) named.travels = extra.travels;
     if (named.speed === null && extra.speed !== null) named.speed = extra.speed;
     if (named.travel === null && extra.travel !== null) named.travel = extra.travel;
     if (named.passes === null && extra.passes !== null) named.passes = extra.passes;
@@ -243,6 +249,8 @@ function libraryNamed(entry) {
     if ((force === undefined || force === null || force === "") && entry.forces && entry.forces.length) force = entry.forces[0];
     named.force = numOrNull(force);
     named.forces = entry.forces && entry.forces.length ? entry.forces : null;
+    named.speeds = entry.speeds && entry.speeds.length ? entry.speeds : null;
+    named.travels = entry.travels && entry.travels.length ? entry.travels : null;
     named.speed = numOrNull(entry.speed);
     named.travel = numOrNull(entry.travel);
     named.passes = numOrNull(entry.passes);
@@ -306,6 +314,8 @@ function jobPathFrom(item, holder, mode, named, order, loopForce) {
         path.link = link.index;
     }
     if (named.forces && named.forces.length > 1) path.forces = named.forces;
+    if (named.speeds && named.speeds.length > 1) path.speeds = named.speeds;
+    if (named.travels && named.travels.length > 1) path.travels = named.travels;
     if (typeof named.offset === "number" && !isNaN(named.offset)) path.blade_offset_mm = named.offset;
     if (named.stay === true || named.stay === false) path.stay_down = named.stay === true;
     if (typeof named.depth === "number") path.cut_depth = named.depth;
@@ -446,19 +456,48 @@ function layerNames(item) {
     return names;
 }
 
+function lapsFromName(name) {
+    var expr = /F\s*(\d+)\s+S\s*(\d+)\s+T\s*(\d+)\s+x\s*(\d+)/gi;
+    var found, count, i, laps = [];
+    while ((found = expr.exec(String(name)))) {
+        count = parseInt(found[4], 10);
+        if (isNaN(count) || count < 1) count = 1;
+        for (i = 0; i < count; i++) {
+            laps.push({
+                force: parseInt(found[1], 10),
+                speed: parseInt(found[2], 10),
+                travel: parseInt(found[3], 10)
+            });
+        }
+    }
+    return laps.length ? laps : null;
+}
+
+function lapColumn(laps, key) {
+    var out = [];
+    var i;
+    for (i = 0; i < laps.length; i++) out.push(laps[i][key]);
+    return out;
+}
+
 function parseLayerName(name) {
     var text = String(name).toLowerCase();
     var mode = "";
-    var forces = forcesFromName(name);
+    var laps = lapsFromName(name);
+    var forces = laps ? lapColumn(laps, "force") : forcesFromName(name);
+    var speeds = laps ? lapColumn(laps, "speed") : null;
+    var travels = laps ? lapColumn(laps, "travel") : null;
     var stay = tokenNumber(name, "Z");
     if (text.indexOf("stift") >= 0 || text.indexOf("pen") >= 0) mode = "pen";
     else if (text.indexOf("falz") >= 0 || text.indexOf("fold") >= 0) mode = "fold";
     return {
         force: forces ? forces[0] : null,
         forces: forces,
-        speed: firstNumber(name, /S\s*(\d+)/i),
-        travel: firstNumber(name, /T\s*(\d+)/i),
-        passes: firstNumber(name, /x\s*(\d+)/i),
+        speeds: speeds,
+        travels: travels,
+        speed: speeds ? speeds[0] : firstNumber(name, /S\s*(\d+)/i),
+        travel: travels ? travels[0] : firstNumber(name, /T\s*(\d+)/i),
+        passes: laps ? laps.length : firstNumber(name, /x\s*(\d+)/i),
         holder: holderFromName(name),
         mode: mode,
         offset: offsetFromName(name),

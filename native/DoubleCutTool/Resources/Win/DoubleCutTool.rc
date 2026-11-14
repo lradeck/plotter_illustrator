@@ -1,0 +1,61 @@
+#include "resource.h"
+
+#include "DoubleCutToolID.h"
+#include <winres.h>
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
+#ifdef _WIN32
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+#pragma code_page(1252)
+#endif
+
+#define kMySDKPluginName "DoubleCutTool"
+#define PIPL_PLUGIN_NAME kMySDKPluginName
+
+#include "VersionInfo.rc"
+
+plugin pipl "plugin.pipl"
+
+#endif
+
+IDD_CUTOVER DIALOGEX 0, 0, 210, 92
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Cut over"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT           "Cut over", -1, 8, 10, 50, 10
+    EDITTEXT        IDC_CUT_MM, 64, 8, 36, 12, ES_AUTOHSCROLL
+    LTEXT           "mm", -1, 104, 10, 16, 10
+    AUTOCHECKBOX    "Connect cut over ends", IDC_CONNECT, 8, 28, 140, 12
+    LTEXT           "Schleife", -1, 8, 48, 50, 10
+    EDITTEXT        IDC_LOOP_MM, 64, 46, 36, 12, ES_AUTOHSCROLL
+    LTEXT           "mm", -1, 104, 48, 16, 10
+    DEFPUSHBUTTON   "OK", IDOK, 108, 70, 44, 14
+    PUSHBUTTON      "Abbrechen", IDCANCEL, 156, 70, 46, 14
+END
+
+IDD_SPLIT DIALOGEX 0, 0, 220, 70
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Split inward"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT           "Der Pfad wird am angeklickten Anker geteilt. Beide Stuecke starten dort und laufen vom Punkt weg.", -1, 8, 8, 204, 24
+    DEFPUSHBUTTON   "OK", IDOK, 166, 48, 44, 14
+END
+
+IDD_OVERLAP DIALOGEX 0, 0, 180, 64
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Overlap"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT           "Overlap", -1, 8, 10, 50, 10
+    EDITTEXT        IDC_OVERLAP_MM, 64, 8, 36, 12, ES_AUTOHSCROLL
+    LTEXT           "mm", -1, 104, 10, 16, 10
+    DEFPUSHBUTTON   "OK", IDOK, 78, 40, 44, 14
+    PUSHBUTTON      "Abbrechen", IDCANCEL, 126, 40, 46, 14
+END
+
+IDToFile txt "IDToFile.txt"
+S_CutOver_Lg_N_at_2x svg "S_CutOver_Lg_N@2x.svg"
+S_SplitIn_Lg_N_at_2x svg "S_SplitIn_Lg_N@2x.svg"
+S_Overlap_Lg_N_at_2x svg "S_Overlap_Lg_N@2x.svg"

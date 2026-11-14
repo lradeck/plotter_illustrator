@@ -1,0 +1,3 @@
+19001.svg		S_CutOver_Lg_N@2x.svg
+19002.svg		S_SplitIn_Lg_N@2x.svg
+19003.svg		S_Overlap_Lg_N@2x.svg

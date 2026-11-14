@@ -11,6 +11,8 @@ configurations.json
 connection.json
 materials.yaml
 history.json
+notes.json
+tool-settings.json
 
 # Jobs saved while fake_plotter.py is listening.
 captures/job_*.bin

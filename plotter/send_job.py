@@ -104,11 +104,10 @@ def anchor_top_left(paths):
     machine X. Both run into the negative quadrant, which is where the sheet
     sits to the right and below the head.
 
-    The pen draws first, then the knife. A whole number is finished before
-    the next one: a horizontal row left to right, and a speed column from
-    the top of one area down before the area below. Cuts follow the layer
-    order, and inside a layer they run in a snake from the top left. Each
-    path then starts at the end nearest the head.
+    The pen draws first, then the knife. Cuts follow the layer stack: the
+    top layer first, then the next, through the last layer. A second pass
+    starts only after every path has been cut once. An open path is not
+    closed. Each path then starts at the end nearest the head.
     """
     points = [pt for path in paths for pt in path.get("points_mm") or []]
     if not points:
@@ -133,6 +132,7 @@ def anchor_top_left(paths):
     anchored = _group_stay(anchored)
     _chain(anchored)
     anchored = expand_stay_chains(anchored)
+    anchored = _passes_across_layers(anchored)
     width = max(-pt[0] for path in anchored for pt in path["points_mm"])
     height = max(-pt[1] for path in anchored for pt in path["points_mm"])
     if width <= 0:
@@ -145,7 +145,91 @@ def anchor_top_left(paths):
 def _arrange(paths):
     pens = [path for path in paths if path.get("mode") == "pen"]
     cuts = [path for path in paths if path.get("mode") != "pen"]
-    return _paint_numbers(pens) + _by_layer(cuts, True)
+    return _paint_numbers(pens) + _by_document_order(cuts)
+
+
+def _by_document_order(paths):
+    """Top layer first. Paths keep the order Illustrator stacked them in."""
+    return sorted(paths, key=lambda path: path.get("_order", 0))
+
+
+def _passes_across_layers(paths):
+    """One pass of every path, then the next pass.
+
+    An open path is copied once per pass so the knife travels back to its
+    start instead of cutting across the gap. Consecutive passes of one
+    closed path, with the same force, stay one continuous cut.
+    """
+    if not paths:
+        return []
+    counts = [max(1, int(path.get("passes") or 1)) for path in paths]
+    limit = max(counts)
+    if limit == 1:
+        return paths
+    scheduled = []
+    for lap in range(limit):
+        for index, path in enumerate(paths):
+            if lap >= counts[index]:
+                continue
+            scheduled.append(_one_pass(path, lap, counts[index], index))
+    return _join_closed_passes(scheduled)
+
+
+def _series(path, key, fallback, count, default):
+    raw = path.get(key)
+    if isinstance(raw, (list, tuple)) and raw:
+        values = [int(round(float(value))) for value in raw]
+    else:
+        values = [int(round(float(path.get(fallback, default))))]
+    if len(values) < count:
+        values.extend([values[-1]] * (count - len(values)))
+    return values[:count]
+
+
+def _one_pass(path, lap, count, source):
+    copy = dict(path)
+    copy["points_mm"] = [list(pt) for pt in path.get("points_mm") or []]
+    copy["passes"] = 1
+    forces = _series(path, "forces", "force", count, 20)
+    speeds = _series(path, "speeds", "cut_speed", count, 20)
+    travels = _series(path, "travels", "travel_speed", count, 20)
+    copy["force"] = forces[lap]
+    copy["cut_speed"] = speeds[lap]
+    copy["travel_speed"] = travels[lap]
+    copy["forces"] = [forces[lap]]
+    copy["speeds"] = [speeds[lap]]
+    copy["travels"] = [travels[lap]]
+    copy.pop("resume", None)
+    copy.pop("handoff", None)
+    copy["_src"] = source
+    return copy
+
+
+def _join_closed_passes(paths):
+    if not paths:
+        return []
+    merged = [paths[0]]
+    for path in paths[1:]:
+        prev = merged[-1]
+        same_cut = (
+            prev.get("_src") == path.get("_src")
+            and prev.get("closed", True)
+            and path.get("closed", True)
+            and prev.get("force") == path.get("force")
+            and prev.get("cut_speed") == path.get("cut_speed")
+            and prev.get("travel_speed") == path.get("travel_speed")
+            and prev.get("stay_down") is not False
+        )
+        if same_cut:
+            prev["passes"] = int(prev.get("passes") or 1) + 1
+            prev["forces"] = list(prev.get("forces") or []) + list(path.get("forces") or [])
+            prev["speeds"] = list(prev.get("speeds") or []) + list(path.get("speeds") or [])
+            prev["travels"] = list(prev.get("travels") or []) + list(path.get("travels") or [])
+            continue
+        merged.append(path)
+    for index, path in enumerate(merged):
+        path["order"] = index
+    return merged
 
 
 def _paint_numbers(paths):

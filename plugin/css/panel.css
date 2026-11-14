@@ -168,9 +168,18 @@ button.toggle.on {
 .fields button, .fields .span2 { grid-column: 1 / -1; }
 .pair { display: flex; gap: 6px; align-items: center; }
 .hidden { display: none; }
-#pass-forces, #cfg-pass-forces { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
-#pass-forces input, #cfg-pass-forces input, .pass input { width: 72px; }
-.pass { display: flex; align-items: center; gap: 6px; }
+.pass-card {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 4px 8px;
+    align-items: center;
+    padding: 6px;
+    border: 1px solid #4a4a4a;
+    border-radius: 6px;
+}
+.pass-title { grid-column: 1 / -1; color: #f2f2f2; }
+#pass-rows, #cfg-pass-rows { display: flex; flex-direction: column; gap: 6px; }
+#pass-rows:empty, #cfg-pass-rows:empty { display: none; }
 
 #history {
     list-style: none;
@@ -293,7 +302,7 @@ button.toggle.on {
 
 .configs button:disabled { opacity: 0.45; cursor: default; }
 
-#apply, #reread {
+#reread {
     appearance: none;
     border: 1px solid #555;
     background: #3a3a3a;
@@ -314,7 +323,7 @@ button.toggle.on {
 
 #reread svg { width: 16px; height: 16px; }
 
-#apply:disabled, #reread:disabled { opacity: 0.45; cursor: default; }
+#reread:disabled { opacity: 0.45; cursor: default; }
 
 #status {
     min-height: 32px;
@@ -361,4 +370,17 @@ button.toggle.on {
     align-items: center;
     justify-content: space-between;
     color: #f2f2f2;
+}
+
+.notes-text {
+    width: 100%;
+    min-height: 280px;
+    box-sizing: border-box;
+    resize: vertical;
+    background: #1f1f1f;
+    color: #f2f2f2;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 8px;
+    line-height: 1.4;
 }

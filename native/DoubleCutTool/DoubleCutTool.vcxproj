@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{A7C3E1B2-4F58-4C1A-9D66-1B2E8A4D0C11}</ProjectGuid>
+    <RootNamespace>DoubleCutTool</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <AI_SDK>C:\Users\Leon\Downloads\Adobe Illustrator 2026 SDK</AI_SDK>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseOfMfc>false</UseOfMfc>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseOfMfc>false</UseOfMfc>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="PropertySheets">
+    <Import Project="$(AI_SDK)\samplecode\common\win\AIPluginCommon.props" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="PropertySheets">
+    <Import Project="$(AI_SDK)\samplecode\common\win\AIPluginCommon.props" />
+  </ImportGroup>
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)..\output\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)..\output\objects\DoubleCutTool\$(Platform)\$(Configuration)\</IntDir>
+    <TargetName>DoubleCutTool</TargetName>
+    <TargetExt>.aip</TargetExt>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)Source;$(ProjectDir)Resources\Win;$(AI_SDK)\samplecode\common\includes;$(AI_SDK)\illustratorapi\illustrator;$(AI_SDK)\illustratorapi\illustrator\actions;$(AI_SDK)\illustratorapi\illustrator\legacy;$(AI_SDK)\illustratorapi\pica_sp;$(AI_SDK)\illustratorapi\ate;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN_ENV;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <StructMemberAlignment>8Bytes</StructMemberAlignment>
+      <WarningLevel>Level3</WarningLevel>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <CompileAs>CompileAsCpp</CompileAs>
+      <ForcedIncludeFiles>pragma.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebugDLL</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreadedDLL</RuntimeLibrary>
+    </ClCompile>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Resources\raw;$(ProjectDir)Source;$(AI_SDK)\samplecode\common\win;$(AI_SDK)\samplecode\common\includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <ModuleDefinitionFile>$(AI_SDK)\samplecode\common\win\PluginMain.def</ModuleDefinitionFile>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <LargeAddressAware>true</LargeAddressAware>
+      <RandomizedBaseAddress>false</RandomizedBaseAddress>
+    </Link>
+    <PreBuildEvent>
+      <Command>py -3 "$(AI_SDK)\tools\pipl\create_pipl.py" -input "[{\"name\":\"DoubleCutTool\",\"entry_point\":\"PluginMain\"}]"</Command>
+    </PreBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="Source\DoubleCutToolPlugin.cpp" />
+    <ClCompile Include="Source\DoubleCutToolSuites.cpp" />
+    <ClCompile Include="Source\PathEdit.cpp" />
+    <ClCompile Include="Source\ToolSettings.cpp" />
+    <ClCompile Include="$(AI_SDK)\samplecode\common\source\AppContext.cpp" />
+    <ClCompile Include="$(AI_SDK)\samplecode\common\source\Main.cpp" />
+    <ClCompile Include="$(AI_SDK)\samplecode\common\source\Plugin.cpp" />
+    <ClCompile Include="$(AI_SDK)\samplecode\common\source\Suites.cpp" />
+    <ClCompile Include="$(AI_SDK)\illustratorapi\illustrator\IAIUnicodeString.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Source\DoubleCutToolID.h" />
+    <ClInclude Include="Source\DoubleCutToolPlugin.h" />
+    <ClInclude Include="Source\DoubleCutToolSuites.h" />
+    <ClInclude Include="Source\PathEdit.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Resources\Win\DoubleCutTool.rc" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
