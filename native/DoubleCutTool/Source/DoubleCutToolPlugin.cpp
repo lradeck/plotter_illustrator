@@ -76,7 +76,7 @@ ASErr DoubleCutToolPlugin::AddTools(SPInterfaceMessage* message)
 	const char* titles[3] = {
 		"Cut over. Click a path, including between anchors. An anchor is added there and the path is cut over. Double-click for millimetres and the loop.",
 		"Split inward. Click a path, including between anchors. An anchor is added there and both cuts start at that point. Double-click for details.",
-		"Overlap. Click a path, including between anchors. The path is split there and both ends follow the other path. Double-click for millimetres."
+		"Overlap. Click a path, including between anchors. An anchor is added there and the path is split like cut over. Each end continues along the path it leads into. Double-click for millimetres."
 	};
 	ai::uint32 icons[3] = { kCutOverIconResID, kSplitInIconResID, kOverlapIconResID };
 	for (int i = 0; i < 3; ++i) {

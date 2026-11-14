@@ -507,6 +507,20 @@ bool ClosestOnPath(const Segs& segs, const AIRealPoint& target, AIReal limit, Cu
 	int n = (int)segs.pts.size();
 	int count = segs.closed ? n : n - 1;
 	if (count < 1) return false;
+	for (int i = 0; i < n; ++i) {
+		AIReal dist = Distance(segs.pts[i].p, target);
+		if (dist >= hit.dist) continue;
+		hit.dist = dist;
+		hit.at = segs.pts[i].p;
+		if (!segs.closed && i == n - 1) {
+			hit.seg = n - 2;
+			hit.t = 1;
+		}
+		else {
+			hit.seg = i;
+			hit.t = 0;
+		}
+	}
 	for (int i = 0; i < count; ++i) {
 		int j = (i + 1) % n;
 		AIRealBezier bez = BezierOf(segs.pts[i], segs.pts[j]);
@@ -556,54 +570,6 @@ std::vector<AIPathSegment> ClipFrom(const std::vector<AIPathSegment>& pts, int i
 	return ClipForward(oriented, dist);
 }
 
-struct Half {
-	std::vector<AIPathSegment> pts;
-	bool joinStart;
-	bool joinEnd;
-};
-
-void MakeHalves(const Segs& src, int index, std::vector<Half>& out)
-{
-	out.clear();
-	if (src.pts.size() < 2 || index < 0 || index >= (int)src.pts.size()) return;
-	if (src.closed) {
-		Segs open = OpenAt(src, index);
-		Half half;
-		half.pts = open.pts;
-		half.joinStart = true;
-		half.joinEnd = true;
-		out.push_back(half);
-		return;
-	}
-	int last = (int)src.pts.size() - 1;
-	if (index <= 0) {
-		Half half;
-		half.pts = src.pts;
-		half.joinStart = true;
-		half.joinEnd = false;
-		out.push_back(half);
-		return;
-	}
-	if (index >= last) {
-		Half half;
-		half.pts = src.pts;
-		half.joinStart = false;
-		half.joinEnd = true;
-		out.push_back(half);
-		return;
-	}
-	Half left;
-	Half right;
-	left.pts.assign(src.pts.begin(), src.pts.begin() + index + 1);
-	left.joinStart = false;
-	left.joinEnd = true;
-	right.pts.assign(src.pts.begin() + index, src.pts.end());
-	right.joinStart = true;
-	right.joinEnd = false;
-	out.push_back(left);
-	out.push_back(right);
-}
-
 void ClipsAt(const Segs& src, int index, AIReal dist, std::vector<AIPathSegment>& forward, std::vector<AIPathSegment>& back)
 {
 	if (src.closed) {
@@ -625,19 +591,6 @@ AIRealPoint LeaveOf(const std::vector<AIPathSegment>& clip)
 	return Depart(clip[0], clip[1]);
 }
 
-AIRealPoint WantDir(const std::vector<AIPathSegment>& pts, bool atStart)
-{
-	AIRealPoint none;
-	none.h = 0;
-	none.v = 0;
-	if (pts.size() < 2) return none;
-	if (!atStart) return Arrive(pts[pts.size() - 2], pts.back());
-	AIRealPoint dir = Depart(pts[0], pts[1]);
-	dir.h = -dir.h;
-	dir.v = -dir.v;
-	return dir;
-}
-
 std::vector<AIPathSegment> ChooseClip(const std::vector<AIPathSegment>& forward, const std::vector<AIPathSegment>& back, const AIRealPoint& want)
 {
 	bool hasForward = forward.size() >= 2;
@@ -650,99 +603,120 @@ std::vector<AIPathSegment> ChooseClip(const std::vector<AIPathSegment>& forward,
 	return forwardDot >= backDot ? forward : back;
 }
 
-void ExtendAlong(Half& half, const std::vector<AIPathSegment>& forward, const std::vector<AIPathSegment>& back)
+int AnchorAtPoint(Segs& segs, const CurveHit& hit)
 {
-	std::vector<AIPathSegment> endClip;
-	if (half.joinEnd) {
-		endClip = ChooseClip(forward, back, WantDir(half.pts, false));
-		if (endClip.size() >= 2) Attach(half.pts, false, endClip);
+	int found = -1;
+	AIReal best = 0.8f;
+	for (int i = 0; i < (int)segs.pts.size(); ++i) {
+		AIReal dist = Distance(segs.pts[i].p, hit.at);
+		if (dist > best) continue;
+		best = dist;
+		found = i;
 	}
-	if (!half.joinStart) return;
-	std::vector<AIPathSegment> clip = ChooseClip(forward, back, WantDir(half.pts, true));
-	if (half.joinEnd && forward.size() >= 2 && back.size() >= 2 && clip.size() >= 2 && endClip.size() >= 2
-		&& Distance(clip[1].p, endClip[1].p) < 0.05) {
-		clip = Distance(endClip[1].p, forward[1].p) < 0.05 ? back : forward;
-	}
-	if (clip.size() >= 2) Attach(half.pts, true, clip);
+	if (found >= 0) return found;
+	return EnsureAnchor(segs, hit.seg, hit.t, kSegmentHitType);
 }
 
-ASErr WriteHalves(AIArtHandle path, const std::vector<Half>& halves)
+bool ClipLeadsTo(AIArtHandle self, const AIRealPoint& from, const AIRealPoint& dir, AIReal dist, std::vector<AIPathSegment>& clip)
 {
-	if (halves.size() == 1) {
-		Segs segs;
-		segs.closed = false;
-		segs.pts = halves[0].pts;
-		return ReplaceWith(path, segs, "Overlap");
-	}
-	if (halves.size() >= 2) {
-		Segs left;
-		Segs right;
-		left.closed = false;
-		right.closed = false;
-		left.pts = halves[0].pts;
-		right.pts = halves[1].pts;
-		return ReplaceWithTwo(path, left, right, "Overlap");
-	}
-	return kNoErr;
-}
-
-ASErr Overlap(AIArtHandle path, Segs hit, int anchor)
-{
-	if (hit.pts.size() < 2 || anchor < 0 || anchor >= (int)hit.pts.size()) return kNoErr;
-	AIRealPoint at = hit.pts[anchor].p;
-	const AIReal reach = 8;
-
-	AIArtHandle otherPath = NULL;
-	Segs other;
-	int otherAnchor = -1;
 	AIArtHandle** matches = NULL;
 	ai::int32 count = 0;
 	AIMatchingArtSpec spec(kPathArt, 0, 0);
-	ASErr err = sAIMatchingArt->GetMatchingArt(&spec, 1, &matches, &count);
-	CurveHit closest;
-	closest.dist = reach + 1;
-	if (!err) {
-		for (ai::int32 i = 0; i < count; ++i) {
-			AIArtHandle candidate = (*matches)[i];
-			if (candidate == path || !UsablePath(candidate)) continue;
-			Segs segs;
-			if (ReadSegs(candidate, segs) != kNoErr || segs.pts.size() < 2) continue;
-			CurveHit found;
-			if (!ClosestOnPath(segs, at, reach, found) || found.dist >= closest.dist) continue;
-			closest = found;
-			otherPath = candidate;
-			other = segs;
-		}
-		if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+	if (sAIMatchingArt->GetMatchingArt(&spec, 1, &matches, &count) != kNoErr) return false;
+	bool got = false;
+	AIReal bestScore = 1e9f;
+	for (ai::int32 i = 0; i < count; ++i) {
+		AIArtHandle candidate = (*matches)[i];
+		if (candidate == self || !UsablePath(candidate)) continue;
+		Segs segs;
+		if (ReadSegs(candidate, segs) != kNoErr || segs.pts.size() < 2) continue;
+		ai::int32 attr = 0;
+		bool selected = sAIArt->GetArtUserAttr(candidate, kArtSelected, &attr) == kNoErr && (attr & kArtSelected) != 0;
+		AIReal allow = selected ? 30.0f * kPtPerMm : 20.0f * kPtPerMm;
+		CurveHit found;
+		if (!ClosestOnPath(segs, from, allow, found)) continue;
+		AIRealPoint delta = SubPoint(found.at, from);
+		AIReal gap = LengthPoint(delta);
+		AIReal align = 1;
+		AIReal dirLen = LengthPoint(dir);
+		if (gap > 1.0f * kPtPerMm && dirLen > 0.01f) align = (delta.h * dir.h + delta.v * dir.v) / (gap * dirLen);
+		if (!selected && align < 0 && gap > 3.0f * kPtPerMm) continue;
+		Segs edited = segs;
+		int at = AnchorAtPoint(edited, found);
+		if (at < 0) continue;
+		std::vector<AIPathSegment> forward;
+		std::vector<AIPathSegment> back;
+		ClipsAt(edited, at, dist, forward, back);
+		std::vector<AIPathSegment> pick = ChooseClip(forward, back, dir);
+		if (pick.size() < 2 || Distance(pick.front().p, pick.back().p) < 0.05f) continue;
+		AIReal score = gap - align * (4.0f * kPtPerMm);
+		if (selected) score -= 40.0f * kPtPerMm;
+		if (score >= bestScore) continue;
+		ShiftOnto(pick, from);
+		clip = pick;
+		bestScore = score;
+		got = true;
 	}
-	if (!otherPath) return kNoErr;
-	otherAnchor = NearestAnchor(other, closest.at);
-	if (otherAnchor < 0) otherAnchor = EnsureAnchor(other, closest.seg, closest.t, kSegmentHitType);
-	if (otherAnchor < 0) return kNoErr;
+	if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+	return got;
+}
 
+bool ExtendOpenEnd(std::vector<AIPathSegment>& pts, bool atStart, AIReal dist, AIArtHandle self)
+{
+	if (pts.size() < 2) return false;
+	AIRealPoint from;
+	AIRealPoint dir;
+	if (atStart) {
+		from = pts.front().p;
+		dir = Depart(pts[0], pts[1]);
+		dir.h = -dir.h;
+		dir.v = -dir.v;
+	}
+	else {
+		from = pts.back().p;
+		dir = Arrive(pts[pts.size() - 2], pts.back());
+	}
+	std::vector<AIPathSegment> clip;
+	if (!ClipLeadsTo(self, from, dir, dist, clip)) return false;
+	Attach(pts, atStart, clip);
+	return true;
+}
+
+ASErr Overlap(AIArtHandle path, Segs segs, int index)
+{
+	if (segs.pts.size() < 2 || index < 0 || index >= (int)segs.pts.size()) return kNoErr;
 	ToolSettings cfg = LoadToolSettings();
-	AIReal overlap = (AIReal)(cfg.overlapMm * kPtPerMm);
-	std::vector<AIPathSegment> otherForward;
-	std::vector<AIPathSegment> otherBack;
-	std::vector<AIPathSegment> hitForward;
-	std::vector<AIPathSegment> hitBack;
-	ClipsAt(other, otherAnchor, overlap, otherForward, otherBack);
-	ClipsAt(hit, anchor, overlap, hitForward, hitBack);
-	ShiftOnto(otherForward, hit.pts[anchor].p);
-	ShiftOnto(otherBack, hit.pts[anchor].p);
-	ShiftOnto(hitForward, other.pts[otherAnchor].p);
-	ShiftOnto(hitBack, other.pts[otherAnchor].p);
-
-	std::vector<Half> hitHalves;
-	std::vector<Half> otherHalves;
-	MakeHalves(hit, anchor, hitHalves);
-	MakeHalves(other, otherAnchor, otherHalves);
-	for (size_t i = 0; i < hitHalves.size(); ++i) ExtendAlong(hitHalves[i], otherForward, otherBack);
-	for (size_t i = 0; i < otherHalves.size(); ++i) ExtendAlong(otherHalves[i], hitForward, hitBack);
-
-	err = WriteHalves(path, hitHalves);
-	if (err) return err;
-	return WriteHalves(otherPath, otherHalves);
+	AIReal dist = (AIReal)(cfg.overlapMm * kPtPerMm);
+	if (segs.closed) {
+		Segs open = OpenAt(segs, index);
+		std::vector<AIPathSegment> endClip = ClipForward(open.pts, dist);
+		std::vector<AIPathSegment> startClip = TakeInto(open.pts, false, dist);
+		if (endClip.size() >= 2) Attach(open.pts, false, endClip);
+		if (startClip.size() >= 2) Attach(open.pts, true, startClip);
+		return ReplaceWith(path, open, "Overlap");
+	}
+	int last = (int)segs.pts.size() - 1;
+	if (index <= 0) {
+		if (!ExtendOpenEnd(segs.pts, true, dist, path)) return kNoErr;
+		segs.closed = false;
+		return ReplaceWith(path, segs, "Overlap");
+	}
+	if (index >= last) {
+		if (!ExtendOpenEnd(segs.pts, false, dist, path)) return kNoErr;
+		segs.closed = false;
+		return ReplaceWith(path, segs, "Overlap");
+	}
+	Segs left;
+	Segs right;
+	left.closed = false;
+	right.closed = false;
+	left.pts.assign(segs.pts.begin(), segs.pts.begin() + index + 1);
+	right.pts.assign(segs.pts.begin() + index, segs.pts.end());
+	std::vector<AIPathSegment> endClip = ClipForward(right.pts, dist);
+	std::vector<AIPathSegment> startClip = TakeInto(left.pts, false, dist);
+	if (endClip.size() >= 2) Attach(left.pts, false, endClip);
+	if (startClip.size() >= 2) Attach(right.pts, true, startClip);
+	return ReplaceWithTwo(path, left, right, "Overlap");
 }
 
 void MarkUndo(const char* name)
