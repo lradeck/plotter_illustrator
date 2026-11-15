@@ -1153,14 +1153,16 @@ function planProcess(specs, extendPt, overlapPt, offsetPt, steepPt, clearPt) {
         if (!spec || !spec.closed || !spec.verts || spec.verts.length < 4) world.push(null);
         else world.push(formOutline(spec.verts));
     }
+    markInner(specs, world);
     formTotal = 0;
     formNo = 0;
-    for (i = 0; i < world.length; i++) if (world[i]) formTotal++;
+    for (i = 0; i < world.length; i++) if (world[i] && !(specs[i] && specs[i].context)) formTotal++;
     if (!(formTotal > 0)) formTotal = 1;
     for (i = 0; i < specs.length; i++) {
         if (!world[i]) continue;
-        formNo++;
         spec = specs[i];
+        if (spec.context) continue;
+        formNo++;
         progressLabel = "Form " + formNo + " von " + formTotal;
         breaks = markSteepCorners(spec.verts);
         if (breaks.length < 2) {
@@ -1175,6 +1177,7 @@ function planProcess(specs, extendPt, overlapPt, offsetPt, steepPt, clearPt) {
             if (k !== i && world[k]) others.push(world[k]);
         }
         outline.others = others;
+        outline.insideFade = spec.inner === true;
         area = ringArea(spec.verts);
         runs = closedRuns(spec.verts, breaks);
         runTotal = runs.length || 1;
@@ -1189,6 +1192,33 @@ function planProcess(specs, extendPt, overlapPt, offsetPt, steepPt, clearPt) {
         if (runs.length) remove.push(i);
     }
     return { strokes: strokes, remove: remove };
+}
+
+function markInner(specs, world) {
+    var i, k, p, n, hits, areaI, areaK;
+    if (!specs) return;
+    for (i = 0; i < specs.length; i++) {
+        if (specs[i]) specs[i].inner = false;
+    }
+    for (i = 0; i < specs.length; i++) {
+        if (!world || !world[i] || !specs[i] || !specs[i].verts) continue;
+        n = specs[i].verts.length;
+        if (n < 3) continue;
+        areaI = Math.abs(ringArea(specs[i].verts));
+        for (k = 0; k < specs.length; k++) {
+            if (k === i || !world[k] || !specs[k] || !specs[k].verts) continue;
+            areaK = Math.abs(ringArea(specs[k].verts));
+            if (!(areaK > areaI * 1.05)) continue;
+            hits = 0;
+            for (p = 0; p < n; p++) {
+                if (rayInside(specs[i].verts[p].anchor, world[k])) hits++;
+            }
+            if (hits >= n * 0.75) {
+                specs[i].inner = true;
+                break;
+            }
+        }
+    }
 }
 
 function markSteepCorners(verts) {
@@ -1221,6 +1251,7 @@ function markSteepCorners(verts) {
 function finishProcessRun(pts, area, outline, extendPt, overlapPt, offsetPt, steepPt, clearPt) {
     var startRole, endRole, dir, back, dist;
     if (!pts || pts.length < 2) return [];
+    if (outline && outline.insideFade) return overlapFadeRun(pts, area, outline, overlapPt, offsetPt, steepPt, clearPt);
     startRole = pts[0].role;
     endRole = pts[pts.length - 1].role;
     if (startRole === "in" && endRole === "in") return overlapFadeRun(pts, area, outline, overlapPt, offsetPt, steepPt, clearPt);
@@ -1585,6 +1616,16 @@ function formOutline(verts) {
     return line;
 }
 
+function fadeInside(outline) {
+    return !!(outline && outline.insideFade);
+}
+
+function outsideForm(p, outline) {
+    if (!outline || outline.length < 3) return false;
+    if (insideForm(p, outline)) return false;
+    return closestOutline(p, outline).dist > 0.8;
+}
+
 function insideForm(p, outline) {
     var near, nx, ny, stepped;
     if (!outline || outline.length < 3) return false;
@@ -1701,7 +1742,9 @@ function fadeCutsForm(path, outline, clearance, hostReach) {
         samples = sampleCubic(i === 0 ? tip.anchor : other.anchor, c1, c2, i === 0 ? other.anchor : tip.anchor);
         prev = samples[0];
         for (s = 0; s < samples.length; s++) {
-            if (insideForm(samples[s], outline)) return true;
+            if (fadeInside(outline)) {
+                if (s > 0 && s < samples.length - 1 && outsideForm(samples[s], outline)) return true;
+            } else if (insideForm(samples[s], outline)) return true;
             if (s > 1 && crossesOutline(prev, samples[s], outline)) return true;
             prev = samples[s];
         }
@@ -1908,7 +1951,10 @@ function fadeRunTip(pts, atStart, steep, handle, normal, outline) {
     align = sideDir[0] * normal[0] + sideDir[1] * normal[1];
     if (align < 0.25) sideDir = [normal[0], normal[1]];
     else if (align < 0) sideDir = [-sideDir[0], -sideDir[1]];
-    if (insideForm([on.anchor[0] + sideDir[0] * 1.5, on.anchor[1] + sideDir[1] * 1.5], outline)) {
+    var probeInside = insideForm([on.anchor[0] + sideDir[0] * 1.5, on.anchor[1] + sideDir[1] * 1.5], outline);
+    if (fadeInside(outline)) {
+        if (!probeInside) sideDir = [-sideDir[0], -sideDir[1]];
+    } else if (probeInside) {
         sideDir = [-sideDir[0], -sideDir[1]];
     }
     tipAt = [on.anchor[0] + toward[0] * along + sideDir[0] * side, on.anchor[1] + toward[1] * along + sideDir[1] * side];

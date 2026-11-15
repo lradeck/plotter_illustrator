@@ -76,19 +76,25 @@ function scanColors(outPath) {
         for (i = 0; i < found.paths.length; i++) {
             item = found.paths[i];
             key = rgbKey(item.rgb);
-            named = readLayerSettings(item.layers);
+            named = readItemSettings(item);
+            var fromPath = item.name && isComplete(parseLayerName(item.name));
             entry = seen[key];
             if (!entry) {
                 entry = {
                     rgb: item.rgb,
-                    layer: item.layers && item.layers.length ? String(item.layers[0]) : ""
+                    layer: settingsLabel(item),
+                    fromPath: fromPath
                 };
                 if (isComplete(named)) copyNamed(entry, named);
                 seen[key] = entry;
                 list.push(entry);
+            } else if (fromPath && isComplete(named) && !entry.fromPath) {
+                copyNamed(entry, named);
+                entry.layer = settingsLabel(item);
+                entry.fromPath = true;
             } else if (!entry.complete && isComplete(named)) {
                 copyNamed(entry, named);
-                entry.layer = item.layers && item.layers.length ? String(item.layers[0]) : entry.layer;
+                entry.layer = settingsLabel(item);
             }
         }
         logLine("scan colors=" + list.length);
@@ -149,7 +155,7 @@ function collectJob(jobPath, blade, turn, selectedOnly, colorsPath, allowDefault
                     continue;
                 }
             }
-            named = readLayerSettings(item.layers);
+            named = readItemSettings(item);
             entry = library[rgbKey(item.rgb)];
             if (!isComplete(named)) {
                 var fromLib = libraryNamed(entry);
@@ -175,7 +181,7 @@ function collectJob(jobPath, blade, turn, selectedOnly, colorsPath, allowDefault
             mode = named.mode === "pen" || named.mode === "fold" ? named.mode : "cut";
             holder = named.holder === "right" ? "right" : "left";
             if (paths.length < 12) {
-                logLine("plot " + holder + " " + mode + " F" + named.force + " S" + named.speed + " T" + named.travel + " x" + named.passes + (typeof named.offset === "number" ? " O" + named.offset : "") + (typeof named.depth === "number" ? " D" + named.depth : "") + (named.stay ? " Z1" : "") + " seg " + segmentKind(item.note) + " '" + (item.layers && item.layers.length ? item.layers[0] : "") + "'");
+                logLine("plot " + holder + " " + mode + " F" + named.force + " S" + named.speed + " T" + named.travel + " x" + named.passes + (typeof named.offset === "number" ? " O" + named.offset : "") + (typeof named.depth === "number" ? " D" + named.depth : "") + (named.stay ? " Z1" : "") + " seg " + segmentKind(item.note) + " '" + settingsLabel(item) + "'");
             }
             paths.push(jobPathFrom(item, holder, mode, named, paths.length, null));
         }
@@ -305,8 +311,7 @@ function whole(value, fallback) {
 function jobPathFrom(item, holder, mode, named, order, loopForce) {
     var passes = named.passes;
     if (passes < 1) passes = 1;
-    var layerName = "";
-    if (item.layers && item.layers.length) layerName = String(item.layers[0]);
+    var layerName = settingsLabel(item);
     var shape = item.shape || { points: item.points, forces: null };
     var path = {
         holder: holder || "left",
@@ -428,6 +433,7 @@ function addOne(item, color, acc, holder) {
         closed: item.closed === true,
         holder: holder || "",
         layers: layerNames(item),
+        name: pathSettingsName(item),
         marked: layerMarked(item.layer),
         picked: pathSelected(item),
         note: note
@@ -572,6 +578,35 @@ function readLayerSettings(names) {
     return named;
 }
 
+function pathSettingsName(item) {
+    var name = "";
+    var parent = null;
+    try { name = String(item.name || ""); } catch (eName) {}
+    if (isComplete(parseLayerName(name))) return name;
+    try { parent = item.parent; } catch (eParent) { parent = null; }
+    if (parent && parent.typename === "CompoundPathItem") {
+        try { name = String(parent.name || ""); } catch (eCompound) { name = ""; }
+        if (isComplete(parseLayerName(name))) return name;
+    }
+    return "";
+}
+
+function readItemSettings(item) {
+    var names = [];
+    var i;
+    if (item.name) names.push(String(item.name));
+    if (item.layers) {
+        for (i = 0; i < item.layers.length; i++) names.push(item.layers[i]);
+    }
+    return readLayerSettings(names);
+}
+
+function settingsLabel(item) {
+    if (item.name) return String(item.name);
+    if (item.layers && item.layers.length) return String(item.layers[0]);
+    return "";
+}
+
 function layerForPath(doc, path) {
     var name = path.layer;
     if (!name) {
@@ -657,30 +692,27 @@ function applyColorName(r, g, b, layerName) {
         var want = Math.round(r) + "," + Math.round(g) + "," + Math.round(b);
         var items = [];
         collectColored(doc, want, items);
-        logLine("apply want=" + want + " name='" + layerName + "' items=" + items.length);
+        logLine("apply want=" + want + " path='" + layerName + "' items=" + items.length);
         if (!items.length) return "ok 0";
-        var seen = [];
         var count = 0;
-        var i, item, layer, before, after;
+        var i, item, before, after;
         for (i = 0; i < items.length; i++) {
             item = items[i];
-            layer = item.layer;
-            if (!layer) {
-                logLine("apply item without layer");
+            if (!item) continue;
+            unlockLayer(item.layer);
+            try { if (item.locked) item.locked = false; } catch (eLock) {}
+            before = "";
+            try { before = String(item.name); } catch (eBefore) {}
+            try {
+                item.name = layerName;
+                after = String(item.name);
+            } catch (eRename) {
+                logLine("rename path ERR " + clean(eRename.message));
                 continue;
             }
-            if (layerSeen(seen, layer)) continue;
-            seen.push(layer);
-            if (!pageItemsOnlyColor(layer, want)) {
-                logLine("leave mixed layer '" + layer.name + "'");
-                continue;
-            }
-            unlockLayer(layer);
-            before = String(layer.name);
-            if (before !== layerName) layer.name = layerName;
-            after = String(layer.name);
-            logLine("rename '" + before + "' -> '" + after + "'");
-            if (after !== layerName) return "ERR Ebene blieb '" + clean(after) + "'";
+            logLine("rename path '" + before + "' -> '" + after + "'");
+            if (after !== layerName && after.indexOf(layerName) !== 0) return "ERR Pfad blieb '" + clean(after) + "'";
+            nameCompoundPaths(item, layerName);
             count++;
         }
         try { app.redraw(); } catch (eRedraw) { logLine("redraw " + eRedraw.message); }
@@ -688,6 +720,14 @@ function applyColorName(r, g, b, layerName) {
     } catch (eName) {
         logLine("apply ERR " + clean(eName.message));
         return "ERR " + clean(eName.message);
+    }
+}
+
+function nameCompoundPaths(item, layerName) {
+    var i;
+    if (!item || item.typename !== "CompoundPathItem" || !item.pathItems) return;
+    for (i = 0; i < item.pathItems.length; i++) {
+        try { item.pathItems[i].name = layerName; } catch (eSub) {}
     }
 }
 
@@ -1377,8 +1417,233 @@ function editProcess(cutMm, overlapMm, offsetMm, steepMm, clearMm) {
     }
 }
 
+function rememberSelection() {
+    var paths = livePathItems(selectedPaths());
+    if (!paths.length) return "ok 0";
+    $.global.dcSel = paths;
+    $.global.dcSelAt = new Date().getTime();
+    return "ok " + paths.length;
+}
+
+function livePathItems(list) {
+    var out = [];
+    var i;
+    if (!list) return out;
+    for (i = 0; i < list.length; i++) {
+        try {
+            if (list[i] && list[i].pathPoints && list[i].pathPoints.length >= 2) out.push(list[i]);
+        } catch (eLive) {}
+    }
+    return out;
+}
+
+function pathsToProcess() {
+    var now = livePathItems(selectedPaths());
+    var age;
+    if (now.length) {
+        $.global.dcSel = now;
+        $.global.dcSelAt = new Date().getTime();
+        return now;
+    }
+    age = $.global.dcSelAt ? new Date().getTime() - $.global.dcSelAt : 99999;
+    if (age < 5000) return livePathItems($.global.dcSel);
+    return [];
+}
+
+function visitPathItems(container, visit, skipName) {
+    var i, items;
+    if (!container || !visit) return;
+    if (container.typename === "Document") {
+        for (i = 0; i < container.layers.length; i++) visitPathItems(container.layers[i], visit, skipName);
+        return;
+    }
+    if (container.typename === "Layer") {
+        if (container.visible === false) return;
+        if (skipName && container.name === skipName) return;
+        for (i = 0; i < container.layers.length; i++) visitPathItems(container.layers[i], visit, skipName);
+        items = container.pageItems;
+        for (i = 0; i < items.length; i++) visitPathItems(items[i], visit, skipName);
+        return;
+    }
+    if (container.typename === "GroupItem") {
+        if (container.hidden) return;
+        items = container.pageItems;
+        for (i = 0; i < items.length; i++) visitPathItems(items[i], visit, skipName);
+        return;
+    }
+    if (container.typename === "CompoundPathItem") {
+        if (container.hidden) return;
+        for (i = 0; i < container.pathItems.length; i++) visitPathItems(container.pathItems[i], visit, skipName);
+        return;
+    }
+    if (container.typename === "PathItem") visit(container);
+}
+
+function closedPathItems() {
+    var found = [];
+    visitPathItems(app.activeDocument, function (item) {
+        try {
+            if (item.guides || item.clipping || item.hidden) return;
+            if (item.closed === true && item.pathPoints && item.pathPoints.length >= 4) found.push(item);
+        } catch (ePath) {}
+    }, "Detailgrad Vorschau");
+    return found;
+}
+
+function sameItem(a, b) {
+    if (a === b) return true;
+    try {
+        return a.uuid && b.uuid && String(a.uuid) === String(b.uuid);
+    } catch (eSame) {}
+    return false;
+}
+
+function listHas(list, item) {
+    var i;
+    for (i = 0; i < list.length; i++) if (sameItem(list[i], item)) return true;
+    return false;
+}
+
+function processPrepare(cutMm, overlapMm, offsetMm, steepMm, clearMm) {
+    try {
+        if (!app.documents.length) return "nodoc";
+        loadCorners();
+        var chosen = pathsToProcess();
+        if (!chosen.length) return "nosel";
+        var mark = $.global.markInner;
+        var steep = $.global.markSteepCorners;
+        var runsOf = $.global.closedRuns;
+        var outlineOf = $.global.formOutline;
+        var areaOf = $.global.ringArea;
+        if (typeof mark !== "function" || typeof steep !== "function" || typeof runsOf !== "function") return "ERR pathcorners";
+        if (!(offsetMm > 0)) offsetMm = 6;
+        if (!(steepMm > 0)) steepMm = 5;
+        if (!(clearMm >= 0)) clearMm = 1;
+        if (!(overlapMm > 0)) overlapMm = 2;
+        var closed = closedPathItems();
+        var specs = [];
+        var items = [];
+        var i, spec, queued;
+        for (i = 0; i < closed.length; i++) {
+            spec = { closed: true, verts: readVerts(closed[i]), context: !listHas(chosen, closed[i]) };
+            specs.push(spec);
+            items.push(closed[i]);
+        }
+        var world = [];
+        for (i = 0; i < specs.length; i++) world.push(outlineOf(specs[i].verts));
+        mark(specs, world);
+        var queue = [];
+        var total = 0;
+        for (i = 0; i < specs.length; i++) {
+            if (specs[i].context) continue;
+            queued = steep(specs[i].verts);
+            if (!queued || queued.length < 2) continue;
+            queue.push({
+                item: items[i],
+                runs: runsOf(specs[i].verts, queued),
+                area: areaOf(specs[i].verts),
+                outline: world[i],
+                inner: specs[i].inner === true,
+                others: []
+            });
+        }
+        if (!queue.length) return "none";
+        for (i = 0; i < queue.length; i++) {
+            var k;
+            queue[i].others = [];
+            for (k = 0; k < world.length; k++) {
+                if (world[k] !== queue[i].outline) queue[i].others.push(world[k]);
+            }
+            total += queue[i].runs.length;
+        }
+        $.global.dcProc = {
+            queue: queue,
+            step: 0,
+            run: 0,
+            done: 0,
+            total: total,
+            made: [],
+            extend: cutMm > 0 ? cutMm * MM : 0,
+            overlap: overlapMm * MM,
+            offset: offsetMm * MM,
+            steep: steepMm * MM,
+            clear: clearMm * MM
+        };
+        logLine("process prepare selected " + chosen.length + " forms " + queue.length + " runs " + total);
+        return "ok " + queue.length + " " + total;
+    } catch (ePrep) {
+        logLine("process prepare ERR " + clean(ePrep.message));
+        return "ERR " + clean(ePrep.message);
+    }
+}
+
+function processStep() {
+    try {
+        var job = $.global.dcProc;
+        var entry, madeRuns, i, neu, outline, extendPt, finish;
+        if (!job) return "none";
+        finish = $.global.finishProcessRun;
+        if (typeof finish !== "function") return "ERR pathcorners";
+        if (job.step >= job.queue.length) return "done " + job.made.length;
+        entry = job.queue[job.step];
+        if (!entry || job.run >= entry.runs.length) {
+            try { if (entry) entry.item.remove(); } catch (eRem) {}
+            job.step++;
+            job.run = 0;
+            try { app.redraw(); } catch (eRedraw) {}
+            if (job.step >= job.queue.length) return "done " + job.made.length;
+            return "more " + job.done + " " + job.total;
+        }
+        outline = entry.outline;
+        outline.others = entry.others;
+        outline.insideFade = entry.inner === true;
+        extendPt = entry.inner ? 0 : job.extend;
+        reportProgress(job.total ? job.done / job.total : 0, (entry.inner ? "Innenform " : "Form ") + (job.step + 1) + " von " + job.queue.length);
+        madeRuns = finish(entry.runs[job.run], entry.area, outline, extendPt, job.overlap, job.offset, job.steep, job.clear);
+        for (i = 0; i < madeRuns.length; i++) {
+            neu = entry.item.layer.pathItems.add();
+            neu.closed = false;
+            writeCurve(neu, madeRuns[i]);
+            copyAppearance(entry.item, neu);
+            job.made.push(neu);
+        }
+        job.run++;
+        job.done++;
+        try { app.redraw(); } catch (eRedraw2) {}
+        return "more " + job.done + " " + job.total;
+    } catch (eStep) {
+        logLine("process step ERR " + clean(eStep.message));
+        return "ERR " + clean(eStep.message);
+    }
+}
+
+function processEnd() {
+    try {
+        var job = $.global.dcProc;
+        var made = [];
+        var i;
+        if (!job) return "none";
+        for (i = 0; i < job.made.length; i++) {
+            try {
+                if (job.made[i] && job.made[i].pathPoints) made.push(job.made[i]);
+            } catch (eMade) {}
+        }
+        $.global.dcProc = null;
+        if (made.length) {
+            try { app.activeDocument.selection = made; } catch (eSel) {}
+        }
+        try { app.redraw(); } catch (eRedraw) {}
+        logLine("process end " + made.length);
+        return made.length ? "ok " + made.length : "none";
+    } catch (eEnd) {
+        $.global.dcProc = null;
+        logLine("process end ERR " + clean(eEnd.message));
+        return "ERR " + clean(eEnd.message);
+    }
+}
+
 function loadCorners() {
-    if (typeof planCut === "function") return;
+    if (typeof planCut === "function" && typeof markInner === "function") return;
     var candidates = [];
     var name = "";
     try { name = String($.fileName); } catch (eName) { name = ""; }
@@ -1395,6 +1660,12 @@ function loadCorners() {
             $.global.planCut = planCut;
             if (typeof planOverlap === "function") $.global.planOverlap = planOverlap;
             if (typeof planProcess === "function") $.global.planProcess = planProcess;
+            if (typeof finishProcessRun === "function") $.global.finishProcessRun = finishProcessRun;
+            if (typeof markSteepCorners === "function") $.global.markSteepCorners = markSteepCorners;
+            if (typeof closedRuns === "function") $.global.closedRuns = closedRuns;
+            if (typeof formOutline === "function") $.global.formOutline = formOutline;
+            if (typeof ringArea === "function") $.global.ringArea = ringArea;
+            if (typeof markInner === "function") $.global.markInner = markInner;
             return;
         }
     }

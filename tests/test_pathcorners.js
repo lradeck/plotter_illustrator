@@ -530,4 +530,37 @@ align = (into[0] * outOf[0] + into[1] * outOf[1]) / (intoLen * outLen);
 assert.ok(align > 0.98, "fade follows the handle, not the chord, align " + align.toFixed(3));
 assert.ok(Math.sqrt(Math.pow(chordJoin[0].anchor[0] - joined.anchor[0], 2) + Math.pow(chordJoin[0].anchor[1] - joined.anchor[1], 2)) > 6, "fade end stays large");
 
+var nested = ctx.planProcess([
+    ring([[0, 0], [220, 0], [220, 220], [0, 220]]),
+    ring([[70, 70], [140, 70], [140, 140], [70, 140]])
+], 6 * mm, 2 * mm, 6 * mm, 5 * mm, mm);
+var nestedInner = 0;
+var nestedFade = 0;
+var nestedOuterExt = 0;
+var innerOutline = ctx.formOutline(ring([[70, 70], [140, 70], [140, 140], [70, 140]]).verts);
+nested.strokes.forEach(function (stroke) {
+    var box = { minx: 1e9, miny: 1e9, maxx: -1e9, maxy: -1e9 };
+    var ext = false;
+    var i, a;
+    for (i = 0; i < stroke.verts.length; i++) {
+        a = stroke.verts[i].anchor;
+        if (a[0] < box.minx) box.minx = a[0];
+        if (a[1] < box.miny) box.miny = a[1];
+        if (a[0] > box.maxx) box.maxx = a[0];
+        if (a[1] > box.maxy) box.maxy = a[1];
+        if (stroke.verts[i].role === "ext") ext = true;
+        if (stroke.verts[i].role === "fade" && box.minx > 50) {
+            nestedFade++;
+            assert.ok(ctx.insideForm(a, innerOutline), "inner fade stays inside the inner form at " + a[0].toFixed(1) + "," + a[1].toFixed(1));
+        }
+    }
+    if (box.minx > 50 && box.maxx < 170 && box.miny > 50 && box.maxy < 170) {
+        nestedInner++;
+        assert.ok(!ext, "inner form has no overcut");
+    } else if (ext) nestedOuterExt++;
+});
+assert.ok(nestedInner > 0, "inner form is processed");
+assert.ok(nestedFade > 0, "inner form fades inward");
+assert.ok(nestedOuterExt > 0, "outer form still overcuts");
+
 console.log("pathcorners ok");

@@ -1200,14 +1200,33 @@ function turnMm() {
     return stayChecked("align") ? 1 : 0;
 }
 
+function readConnectionFile() {
+    var fs = nodeRequire("fs");
+    if (!fs.existsSync(CONNECTION_FILE)) return {};
+    try {
+        var data = JSON.parse(fs.readFileSync(CONNECTION_FILE, "utf8"));
+        return data && typeof data === "object" ? data : {};
+    } catch (eConn) {
+        return {};
+    }
+}
+
 function writeConnection() {
     var fs = nodeRequire("fs");
-    var data = {
-        host: document.getElementById("host").value,
-        port: document.getElementById("port").value,
-        marked: document.getElementById("marked").checked ? "1" : "0",
-        align: stayChecked("align") ? "1" : "0"
-    };
+    var data = readConnectionFile();
+    data.host = document.getElementById("host").value;
+    data.port = document.getElementById("port").value;
+    data.marked = document.getElementById("marked").checked ? "1" : "0";
+    data.align = stayChecked("align") ? "1" : "0";
+    fs.writeFileSync(CONNECTION_FILE, JSON.stringify(data, null, 2));
+}
+
+function saveProcessSettings() {
+    var fs = nodeRequire("fs");
+    var data = readConnectionFile();
+    var ids = ["process-overcut", "process-overlap", "process-offset", "process-steep", "process-clear"];
+    var i;
+    for (i = 0; i < ids.length; i++) data[ids[i]] = document.getElementById(ids[i]).value;
     fs.writeFileSync(CONNECTION_FILE, JSON.stringify(data, null, 2));
 }
 
@@ -2111,19 +2130,63 @@ function runCutOver() {
     });
 }
 
+function processStatus(msg) {
+    if (msg === "nodoc") setStatus("Kein Dokument offen.");
+    else if (msg === "nosel") setStatus("Erst eine geschlossene Form selektieren.");
+    else if (msg === "none") setStatus("Keine steile Ecke gefunden.");
+    else if (msg && msg.indexOf("ok") === 0) setStatus("Process: " + msg.split(" ")[1] + " Pfade.");
+    else setStatus(msg || "Process fehlgeschlagen");
+}
+
 function runProcess() {
     var cut = numberValue("process-overcut", 6);
-    var overlap = numberValue("process-overlap", 4);
+    var overlap = numberValue("process-overlap", 2);
     var offset = numberValue("process-offset", 6);
     var steep = numberValue("process-steep", 5);
     var gap = numberValue("process-clear", 1);
+    var total = 1;
     logLine("process cut " + cut + " overlap " + overlap + " offset " + offset + " steep " + steep + " clear " + gap);
-    runTracked("Process", "processForm(" + cut + "," + overlap + "," + offset + "," + steep + "," + gap + ")", function (msg) {
-        if (msg === "nodoc") setStatus("Kein Dokument offen.");
-        else if (msg === "nosel") setStatus("Erst eine geschlossene Form selektieren.");
-        else if (msg === "none") setStatus("Keine steile Ecke gefunden.");
-        else if (msg.indexOf("ok") === 0) setStatus("Process: " + msg.split(" ")[1] + " Pfade.");
-        else setStatus(msg);
+    saveProcessSettings();
+    setBusy(true);
+    showProgress("Process");
+    writeProgress(0.02, "Selektion lesen");
+    evalHost("processPrepare(" + cut + "," + overlap + "," + offset + "," + steep + "," + gap + ")", function (msg) {
+        var parts;
+        if (!msg || msg === "nodoc" || msg === "nosel" || msg === "none" || msg.indexOf("ok ") !== 0) {
+            processStatus(msg);
+            setBusy(false);
+            return;
+        }
+        parts = msg.split(" ");
+        total = parseInt(parts[2], 10);
+        if (!(total > 0)) total = 1;
+        function step() {
+            evalHost("processStep()", function (stepMsg) {
+                var bits, done, frac;
+                if (!stepMsg || stepMsg.indexOf("ERR") === 0) {
+                    processStatus(stepMsg);
+                    evalHost("processEnd()", function () { setBusy(false); });
+                    return;
+                }
+                if (stepMsg.indexOf("done") === 0) {
+                    evalHost("processEnd()", function (endMsg) {
+                        processStatus(endMsg);
+                        writeProgress(1, "Fertig");
+                        refreshColors(function () { setBusy(false); });
+                    });
+                    return;
+                }
+                bits = stepMsg.split(" ");
+                done = parseInt(bits[1], 10);
+                if (!(done > 0)) done = 0;
+                frac = done / total;
+                if (frac < 0.02) frac = 0.02;
+                if (frac > 0.98) frac = 0.98;
+                writeProgress(frac, "Abschnitt " + done + " von " + total);
+                setTimeout(step, 60);
+            });
+        }
+        step();
     });
 }
 
@@ -2171,6 +2234,9 @@ document.getElementById("split-detail").addEventListener("input", function () {
 document.getElementById("tool-close").addEventListener("click", function () {
     if (document.getElementById("tool-sheet").getAttribute("data-tool") === "tool-split") dropSplitPreview();
     closeSheet("tool-sheet");
+});
+["process-overcut", "process-overlap", "process-offset", "process-steep", "process-clear"].forEach(function (id) {
+    document.getElementById(id).addEventListener("change", saveProcessSettings);
 });
 document.getElementById("tool-ok").addEventListener("click", function () {
     var which = document.getElementById("tool-sheet").getAttribute("data-tool");
@@ -2454,6 +2520,10 @@ if (!nodeRequire) {
     renderConfigs(configs.length ? configs[0].name : "");
     if (configs.length) loadEditorConfig();
     logLine("panel ready materials " + configs.length + " shown " + document.getElementById("color-config").options.length + " " + (selectedConfigName() || "none") + " history " + plotJobs.length);
+    setInterval(function () {
+        if (busy) return;
+        evalHost("rememberSelection()", function () {});
+    }, 700);
     if (!configs.length) setStatus("Keine Materialien in configurations.json.");
     setTimeout(function () { renderConfigs(configs.length ? configs[0].name : ""); }, 300);
     var root = "";

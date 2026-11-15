@@ -237,14 +237,14 @@
                 <label for="process-overcut">Overcut max</label>
                 <input id="process-overcut" value="6" title="Millimeter. Overcut an Aussenecken, kuerzer nur wenn er die Form schneidet.">
                 <label for="process-overlap">Overlap</label>
-                <input id="process-overlap" value="4" title="Millimeter. Der Overlap bleibt in dieser Laenge auf dem Pfad.">
+                <input id="process-overlap" value="2" title="Millimeter. Der Overlap bleibt in dieser Laenge auf dem Pfad.">
                 <label for="process-offset">Curve offset max</label>
                 <input id="process-offset" value="6" title="Millimeter. Curve offset, so gross wie moeglich bis zu diesem Maximum.">
                 <label for="process-steep">Curve steepness max</label>
                 <input id="process-steep" value="5" title="Millimeter. Curve steepness, so gross wie moeglich bis zu diesem Maximum.">
                 <label for="process-clear">Clearance</label>
                 <input id="process-clear" value="1" title="Millimeter. Mindestabstand zwischen dem Fade-in und der uebrigen Form.">
-                <p class="hint">Overlap bleibt fest. Offset und Steepness bleiben so gross wie moeglich, damit der Fade glatt ist und den Abstand zur Form einhaelt. Dafuer darf die Stelle auch krummer sein.</p>
+                <p class="hint">Overlap bleibt fest. Offset und Steepness bleiben so gross wie moeglich, damit der Fade glatt ist und den Abstand zur Form einhaelt. Nur die Selektion wird bearbeitet. Formen in der aeussersten Form bekommen keinen Overcut, ihr Fade-in liegt innen.</p>
             </div>
             <div id="tool-split" class="tool-fields hidden">
                 <label for="split-detail">Detailgrad <span id="split-detail-value">20</span>°</label>
