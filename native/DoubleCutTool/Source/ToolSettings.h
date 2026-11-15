@@ -8,6 +8,9 @@ struct ToolSettings {
 	bool connectLoops;
 	double loopMm;
 	double overlapMm;
+	bool fadeIn;
+	double curveOffsetMm;
+	double curveSteepnessMm;
 };
 
 ToolSettings LoadToolSettings();

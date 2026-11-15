@@ -77,7 +77,7 @@ ASErr DoubleCutToolPlugin::AddTools(SPInterfaceMessage* message)
 	const char* titles[4] = {
 		"Cut over. Click a path, including between anchors. An anchor is added there and the path is cut over. Double-click for millimetres and the loop.",
 		"Split inward. Click a path, including between anchors. An anchor is added there and both cuts start at that point. Double-click for details.",
-		"Overlap. Click a path, including between anchors. An anchor is added there and the path is split like cut over. Each end continues along the path it leads into. Double-click for millimetres.",
+		"Overlap. Click a path. Each end continues along the path it leads into. Double-click for overlap, and optional fade in.",
 		"Pfadrichtung umkehren. Click one path, including inside a group, and its direction reverses. Assign the shortcut under Keyboard Shortcuts, Tools."
 	};
 	ai::uint32 icons[4] = { kCutOverIconResID, kSplitInIconResID, kOverlapIconResID, kReverseIconResID };

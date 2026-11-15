@@ -9,5 +9,8 @@
 #define IDC_CONNECT 1002
 #define IDC_LOOP_MM 1003
 #define IDC_OVERLAP_MM 1004
+#define IDC_FADE_IN 1005
+#define IDC_CURVE_OFFSET_MM 1006
+#define IDC_CURVE_STEEP_MM 1007
 
 #endif

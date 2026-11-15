@@ -26,6 +26,19 @@ bool ReadNumber(const char* text, const char* key, double& value)
 	return true;
 }
 
+bool ReadSigned(const char* text, const char* key, double& value)
+{
+	const char* found = strstr(text, key);
+	if (!found) return false;
+	found += strlen(key);
+	while (*found == '"' || *found == ' ' || *found == ':' || *found == '\t') ++found;
+	char* end = NULL;
+	double number = strtod(found, &end);
+	if (end == found) return false;
+	value = number;
+	return true;
+}
+
 bool ReadFlag(const char* text, const char* key, bool& value)
 {
 	const char* found = strstr(text, key);
@@ -47,7 +60,7 @@ void LoadFile(ToolSettings& settings)
 {
 	HANDLE file = CreateFileA(kFile, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (file == INVALID_HANDLE_VALUE) return;
-	char text[512];
+	char text[1024];
 	DWORD got = 0;
 	BOOL ok = ReadFile(file, text, sizeof(text) - 1, &got, NULL);
 	CloseHandle(file);
@@ -57,18 +70,24 @@ void LoadFile(ToolSettings& settings)
 	ReadNumber(text, "cutOverMm", settings.cutOverMm);
 	ReadNumber(text, "loopMm", settings.loopMm);
 	ReadNumber(text, "overlapMm", settings.overlapMm);
+	ReadNumber(text, "curveOffsetMm", settings.curveOffsetMm);
+	ReadSigned(text, "curveSteepnessMm", settings.curveSteepnessMm);
 	ReadFlag(text, "connectLoops", settings.connectLoops);
+	ReadFlag(text, "fadeIn", settings.fadeIn);
 }
 
 void SaveFile(const ToolSettings& settings)
 {
-	char text[256];
+	char text[640];
 	sprintf_s(text,
-		"{\n  \"cutOverMm\": %.4f,\n  \"connectLoops\": %s,\n  \"loopMm\": %.4f,\n  \"overlapMm\": %.4f\n}\n",
+		"{\n  \"cutOverMm\": %.4f,\n  \"connectLoops\": %s,\n  \"loopMm\": %.4f,\n  \"overlapMm\": %.4f,\n  \"fadeIn\": %s,\n  \"curveOffsetMm\": %.4f,\n  \"curveSteepnessMm\": %.4f\n}\n",
 		settings.cutOverMm,
 		settings.connectLoops ? "true" : "false",
 		settings.loopMm,
-		settings.overlapMm);
+		settings.overlapMm,
+		settings.fadeIn ? "true" : "false",
+		settings.curveOffsetMm,
+		settings.curveSteepnessMm);
 	HANDLE file = CreateFileA(kFile, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (file == INVALID_HANDLE_VALUE) return;
 	DWORD wrote = 0;
@@ -104,11 +123,30 @@ double ParseMm(const char* text, double fallback)
 	return value;
 }
 
+double ParseSignedMm(const char* text, double fallback)
+{
+	char buf[64];
+	buf[63] = 0;
+	strncpy_s(buf, 64, text, _TRUNCATE);
+	for (char* p = buf; *p; ++p) if (*p == ',') *p = '.';
+	char* end = NULL;
+	double value = strtod(buf, &end);
+	if (end == buf) return fallback;
+	return value;
+}
+
 void ReadBox(HWND dlg, int id, double& value)
 {
 	char text[64];
 	GetDlgItemTextA(dlg, id, text, 64);
 	value = ParseMm(text, value);
+}
+
+void ReadSignedBox(HWND dlg, int id, double& value)
+{
+	char text[64];
+	GetDlgItemTextA(dlg, id, text, 64);
+	value = ParseSignedMm(text, value);
 }
 
 INT_PTR CALLBACK CutProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
@@ -178,15 +216,31 @@ INT_PTR CALLBACK OverlapProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 		char text[64];
 		FormatMm(settings->overlapMm, text, 64);
 		SetDlgItemTextA(dlg, IDC_OVERLAP_MM, text);
+		FormatMm(settings->curveOffsetMm, text, 64);
+		SetDlgItemTextA(dlg, IDC_CURVE_OFFSET_MM, text);
+		FormatMm(settings->curveSteepnessMm, text, 64);
+		SetDlgItemTextA(dlg, IDC_CURVE_STEEP_MM, text);
+		CheckDlgButton(dlg, IDC_FADE_IN, settings->fadeIn ? BST_CHECKED : BST_UNCHECKED);
 		return TRUE;
 	}
-	if (msg == WM_COMMAND && settings && LOWORD(wp) == IDC_OVERLAP_MM && HIWORD(wp) == EN_CHANGE) {
-		ReadBox(dlg, IDC_OVERLAP_MM, settings->overlapMm);
+	if (msg == WM_COMMAND && settings && HIWORD(wp) == EN_CHANGE) {
+		if (LOWORD(wp) == IDC_OVERLAP_MM) ReadBox(dlg, IDC_OVERLAP_MM, settings->overlapMm);
+		else if (LOWORD(wp) == IDC_CURVE_OFFSET_MM) ReadBox(dlg, IDC_CURVE_OFFSET_MM, settings->curveOffsetMm);
+		else if (LOWORD(wp) == IDC_CURVE_STEEP_MM) ReadSignedBox(dlg, IDC_CURVE_STEEP_MM, settings->curveSteepnessMm);
+		else return FALSE;
+		SaveToolSettings(*settings);
+		return TRUE;
+	}
+	if (msg == WM_COMMAND && settings && LOWORD(wp) == IDC_FADE_IN && HIWORD(wp) == BN_CLICKED) {
+		settings->fadeIn = IsDlgButtonChecked(dlg, IDC_FADE_IN) == BST_CHECKED;
 		SaveToolSettings(*settings);
 		return TRUE;
 	}
 	if (msg == WM_COMMAND && LOWORD(wp) == IDOK && settings) {
 		ReadBox(dlg, IDC_OVERLAP_MM, settings->overlapMm);
+		ReadBox(dlg, IDC_CURVE_OFFSET_MM, settings->curveOffsetMm);
+		ReadSignedBox(dlg, IDC_CURVE_STEEP_MM, settings->curveSteepnessMm);
+		settings->fadeIn = IsDlgButtonChecked(dlg, IDC_FADE_IN) == BST_CHECKED;
 		SaveToolSettings(*settings);
 		EndDialog(dlg, IDOK);
 		return TRUE;
@@ -207,12 +261,18 @@ ToolSettings LoadToolSettings()
 	settings.connectLoops = false;
 	settings.loopMm = 2.0;
 	settings.overlapMm = 0.5;
+	settings.fadeIn = false;
+	settings.curveOffsetMm = 1.0;
+	settings.curveSteepnessMm = 0.5;
 	double value = 0;
 	if (sAIPreference->GetRealPreference(kPref, "cutOverMm", &value) == kNoErr && value > 0) settings.cutOverMm = value;
 	if (sAIPreference->GetRealPreference(kPref, "loopMm", &value) == kNoErr && value > 0) settings.loopMm = value;
 	if (sAIPreference->GetRealPreference(kPref, "overlapMm", &value) == kNoErr && value > 0) settings.overlapMm = value;
+	if (sAIPreference->GetRealPreference(kPref, "curveOffsetMm", &value) == kNoErr && value > 0) settings.curveOffsetMm = value;
+	if (sAIPreference->GetRealPreference(kPref, "curveSteepnessMm", &value) == kNoErr) settings.curveSteepnessMm = value;
 	AIBoolean flag = false;
 	if (sAIPreference->GetBooleanPreference(kPref, "connectLoops", &flag) == kNoErr) settings.connectLoops = flag != false;
+	if (sAIPreference->GetBooleanPreference(kPref, "fadeIn", &flag) == kNoErr) settings.fadeIn = flag != false;
 	LoadFile(settings);
 	return settings;
 }
@@ -223,7 +283,10 @@ void SaveToolSettings(const ToolSettings& settings)
 	sAIPreference->PutRealPreference(kPref, "cutOverMm", settings.cutOverMm);
 	sAIPreference->PutRealPreference(kPref, "loopMm", settings.loopMm);
 	sAIPreference->PutRealPreference(kPref, "overlapMm", settings.overlapMm);
+	sAIPreference->PutRealPreference(kPref, "curveOffsetMm", settings.curveOffsetMm);
+	sAIPreference->PutRealPreference(kPref, "curveSteepnessMm", settings.curveSteepnessMm);
 	sAIPreference->PutBooleanPreference(kPref, "connectLoops", settings.connectLoops ? true : false);
+	sAIPreference->PutBooleanPreference(kPref, "fadeIn", settings.fadeIn ? true : false);
 }
 
 ASErr EditToolOptions(PathEditKind kind)

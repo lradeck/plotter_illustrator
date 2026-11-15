@@ -682,28 +682,111 @@ bool ExtendOpenEnd(std::vector<AIPathSegment>& pts, bool atStart, AIReal dist, A
 	return true;
 }
 
+AIRealPoint PathCentroid(const std::vector<AIPathSegment>& pts)
+{
+	AIRealPoint center;
+	center.h = 0;
+	center.v = 0;
+	if (pts.empty()) return center;
+	for (size_t i = 0; i < pts.size(); ++i) {
+		center.h += pts[i].p.h;
+		center.v += pts[i].p.v;
+	}
+	center.h /= (AIReal)pts.size();
+	center.v /= (AIReal)pts.size();
+	return center;
+}
+
+AIRealPoint OutsideNormal(const Segs& segs, int index)
+{
+	int n = (int)segs.pts.size();
+	int next = index + 1;
+	if (next >= n) next = segs.closed ? 0 : index;
+	int prev = index - 1;
+	if (prev < 0) prev = segs.closed ? n - 1 : 0;
+	AIRealPoint dir = next != index ? Depart(segs.pts[index], segs.pts[next]) : Arrive(segs.pts[prev], segs.pts[index]);
+	AIRealPoint unit = UnitPoint(dir);
+	AIRealPoint left;
+	left.h = -unit.v;
+	left.v = unit.h;
+	if (!segs.closed || LengthPoint(unit) < 0.5) return left;
+	AIRealPoint center = PathCentroid(segs.pts);
+	AIRealPoint outward = SubPoint(segs.pts[index].p, center);
+	if (left.h * outward.h + left.v * outward.v < 0) {
+		left.h = -left.h;
+		left.v = -left.v;
+	}
+	return left;
+}
+
+void FadeTip(std::vector<AIPathSegment>& pts, bool atStart, AIReal steep, AIReal handle, const AIRealPoint& normal)
+{
+	if (pts.size() < 2 || fabs(steep) < 0.01) return;
+	size_t tipIndex = atStart ? 0 : pts.size() - 1;
+	size_t joinIndex = atStart ? 1 : pts.size() - 2;
+	AIPathSegment join = pts[joinIndex];
+	AIPathSegment on = pts[tipIndex];
+	AIRealPoint towardTip = UnitPoint(SubPoint(on.p, join.p));
+	if (LengthPoint(towardTip) < 0.5) return;
+	const AIReal arc = (AIReal)0.5522847498;
+	AIReal along = handle;
+	if (along < 0.15) along = 0.15;
+	AIReal side = fabs(steep);
+	AIRealPoint sideDir = UnitPoint(ScalePoint(normal, steep));
+	if (LengthPoint(sideDir) < 0.5) sideDir = normal;
+	AIPathSegment tip = Straight(AddPoint(AddPoint(on.p, ScalePoint(towardTip, along)), ScalePoint(sideDir, side)));
+	AIRealPoint tipHandle = ScalePoint(sideDir, -(side * arc));
+	AIRealPoint pathHandle = ScalePoint(towardTip, along * arc);
+	on.corner = false;
+	tip.corner = false;
+	if (atStart) {
+		tip.in = tip.p;
+		tip.out = AddPoint(tip.p, tipHandle);
+		on.in = AddPoint(on.p, pathHandle);
+		pts[tipIndex] = on;
+		pts.insert(pts.begin(), tip);
+	}
+	else {
+		tip.out = tip.p;
+		tip.in = AddPoint(tip.p, tipHandle);
+		on.out = AddPoint(on.p, pathHandle);
+		pts[tipIndex] = on;
+		pts.push_back(tip);
+	}
+}
+
 ASErr Overlap(AIArtHandle path, Segs segs, int index)
 {
 	if (segs.pts.size() < 2 || index < 0 || index >= (int)segs.pts.size()) return kNoErr;
 	ToolSettings cfg = LoadToolSettings();
 	AIReal dist = (AIReal)(cfg.overlapMm * kPtPerMm);
+	AIReal steep = (AIReal)(cfg.curveSteepnessMm * kPtPerMm);
+	AIReal handle = (AIReal)(cfg.curveOffsetMm * kPtPerMm);
+	AIRealPoint outside = OutsideNormal(segs, index);
+	bool fade = cfg.fadeIn;
 	if (segs.closed) {
 		Segs open = OpenAt(segs, index);
 		std::vector<AIPathSegment> endClip = ClipForward(open.pts, dist);
 		std::vector<AIPathSegment> startClip = TakeInto(open.pts, false, dist);
 		if (endClip.size() >= 2) Attach(open.pts, false, endClip);
 		if (startClip.size() >= 2) Attach(open.pts, true, startClip);
+		if (fade) {
+			FadeTip(open.pts, true, steep, handle, outside);
+			FadeTip(open.pts, false, steep, handle, outside);
+		}
 		return ReplaceWith(path, open, "Overlap");
 	}
 	int last = (int)segs.pts.size() - 1;
 	if (index <= 0) {
 		if (!ExtendOpenEnd(segs.pts, true, dist, path)) return kNoErr;
 		segs.closed = false;
+		if (fade) FadeTip(segs.pts, true, steep, handle, outside);
 		return ReplaceWith(path, segs, "Overlap");
 	}
 	if (index >= last) {
 		if (!ExtendOpenEnd(segs.pts, false, dist, path)) return kNoErr;
 		segs.closed = false;
+		if (fade) FadeTip(segs.pts, false, steep, handle, outside);
 		return ReplaceWith(path, segs, "Overlap");
 	}
 	Segs left;
@@ -716,6 +799,10 @@ ASErr Overlap(AIArtHandle path, Segs segs, int index)
 	std::vector<AIPathSegment> startClip = TakeInto(left.pts, false, dist);
 	if (endClip.size() >= 2) Attach(left.pts, false, endClip);
 	if (startClip.size() >= 2) Attach(right.pts, true, startClip);
+	if (fade) {
+		FadeTip(left.pts, false, steep, handle, outside);
+		FadeTip(right.pts, true, steep, handle, outside);
+	}
 	return ReplaceWithTwo(path, left, right, "Overlap");
 }
 

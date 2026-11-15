@@ -43,16 +43,23 @@ BEGIN
     DEFPUSHBUTTON   "OK", IDOK, 166, 48, 44, 14
 END
 
-IDD_OVERLAP DIALOGEX 0, 0, 180, 64
+IDD_OVERLAP DIALOGEX 0, 0, 240, 132
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Overlap"
 FONT 9, "Segoe UI"
 BEGIN
-    LTEXT           "Overlap", -1, 8, 10, 50, 10
-    EDITTEXT        IDC_OVERLAP_MM, 64, 8, 36, 12, ES_AUTOHSCROLL
-    LTEXT           "mm", -1, 104, 10, 16, 10
-    DEFPUSHBUTTON   "OK", IDOK, 78, 40, 44, 14
-    PUSHBUTTON      "Abbrechen", IDCANCEL, 126, 40, 46, 14
+    LTEXT           "Overlap on path", -1, 8, 10, 88, 10
+    EDITTEXT        IDC_OVERLAP_MM, 100, 8, 40, 12, ES_AUTOHSCROLL
+    LTEXT           "mm", -1, 144, 10, 16, 10
+    AUTOCHECKBOX    "Fade in", IDC_FADE_IN, 8, 30, 80, 12
+    LTEXT           "Curve offset", -1, 8, 52, 84, 10
+    EDITTEXT        IDC_CURVE_OFFSET_MM, 100, 50, 40, 12, ES_AUTOHSCROLL
+    LTEXT           "mm", -1, 144, 52, 16, 10
+    LTEXT           "Curve steepness", -1, 8, 74, 88, 10
+    EDITTEXT        IDC_CURVE_STEEP_MM, 100, 72, 40, 12, ES_AUTOHSCROLL
+    LTEXT           "mm", -1, 144, 74, 16, 10
+    DEFPUSHBUTTON   "OK", IDOK, 136, 104, 44, 14
+    PUSHBUTTON      "Abbrechen", IDCANCEL, 184, 104, 46, 14
 END
 
 IDToFile txt "IDToFile.txt"
