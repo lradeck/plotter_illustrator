@@ -15,6 +15,9 @@ ASErr EditPathAt(PathEditKind kind, const AIRealPoint& cursor, const AIEvent* ev
 // 2 when the click will use an existing anchor, 1 when it will add one on the path, 0 otherwise.
 int CursorMode(const AIRealPoint& cursor);
 
+// Same as CursorMode. While fade-in is waiting for the side click, returns 1 off the path.
+int OverlapCursorMode(const AIRealPoint& cursor);
+
 ASErr EditToolOptions(PathEditKind kind);
 
 // Reverses every selected path. Does nothing when no path is selected.

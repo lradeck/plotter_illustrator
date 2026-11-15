@@ -77,7 +77,7 @@ ASErr DoubleCutToolPlugin::AddTools(SPInterfaceMessage* message)
 	const char* titles[4] = {
 		"Cut over. Click a path, including between anchors. An anchor is added there and the path is cut over. Double-click for millimetres and the loop.",
 		"Split inward. Click a path, including between anchors. An anchor is added there and both cuts start at that point. Double-click for details.",
-		"Overlap. Click a path. Each end continues along the path it leads into. Double-click for overlap, and optional fade in.",
+		"Overlap. Click a path. Each end continues along the path it leads into. With fade in, click the path, then click the side the curve should leave toward. Double-click for settings.",
 		"Pfadrichtung umkehren. Click one path, including inside a group, and its direction reverses. Assign the shortcut under Keyboard Shortcuts, Tools."
 	};
 	ai::uint32 icons[4] = { kCutOverIconResID, kSplitInIconResID, kOverlapIconResID, kReverseIconResID };
@@ -242,7 +242,7 @@ ASErr DoubleCutToolPlugin::TrackToolCursor(AIToolMessage* message)
 	if (message->event && sAIDocumentView->GetNthDocumentView(0, &view) == kNoErr && view)
 		sAICursorSnap->HitTrack(view, message->cursor, message->event, "A v o", &at, true);
 	static HCURSOR cursors[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
-	int mode = CursorMode(message->cursor);
+	int mode = message->tool == fTool[2] ? OverlapCursorMode(message->cursor) : CursorMode(message->cursor);
 	if (mode < 0 || mode > 2) mode = 0;
 	if (message->tool == fTool[3]) mode += 3;
 	if (!cursors[mode]) cursors[mode] = MakeCursor(mode);

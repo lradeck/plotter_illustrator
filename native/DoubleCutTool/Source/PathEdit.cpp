@@ -771,14 +771,15 @@ void FadeTip(std::vector<AIPathSegment>& pts, bool atStart, AIReal steep, AIReal
 	}
 }
 
-ASErr Overlap(AIArtHandle path, Segs segs, int index)
+ASErr Overlap(AIArtHandle path, Segs segs, int index, const AIRealPoint* side)
 {
 	if (segs.pts.size() < 2 || index < 0 || index >= (int)segs.pts.size()) return kNoErr;
 	ToolSettings cfg = LoadToolSettings();
 	AIReal dist = (AIReal)(cfg.overlapMm * kPtPerMm);
 	AIReal steep = (AIReal)(cfg.curveSteepnessMm * kPtPerMm);
 	AIReal handle = (AIReal)(cfg.curveOffsetMm * kPtPerMm);
-	AIRealPoint outside = OutsideNormal(segs, index);
+	AIRealPoint outside = side ? *side : OutsideNormal(segs, index);
+	if (side && steep < 0) steep = -steep;
 	bool fade = cfg.fadeIn;
 	if (segs.closed) {
 		Segs open = OpenAt(segs, index);
@@ -966,8 +967,94 @@ AIRealPoint SnapCursor(const AIRealPoint& cursor, const AIEvent* event)
 	return snapped;
 }
 
+struct FadeAim {
+	bool pending;
+	AIRealPoint at;
+};
+
+FadeAim gFadeAim = { false, { 0, 0 } };
+
+bool NearPath(const AIRealPoint& at, PathPick& pick)
+{
+	if (!PickPath(at, pick, true)) return false;
+	CurveHit on;
+	if (!ClosestOnPath(pick.segs, at, 1.0e9f, on)) return false;
+	if (on.dist > ReachForPixels(8)) return false;
+	pick.hitType = kSegmentHitType;
+	pick.seg = on.seg;
+	pick.t = on.t;
+	return true;
+}
+
+AIRealPoint PathPoint(PathPick& pick, const AIRealPoint& at)
+{
+	int existing = NearestAnchor(pick.segs, at);
+	if (existing >= 0) return pick.segs.pts[existing].p;
+	CurveHit on;
+	if (ClosestOnPath(pick.segs, at, 2000, on)) return on.at;
+	return at;
+}
+
+ASErr ApplyFadeSide(const AIRealPoint& sideClick)
+{
+	PathPick held;
+	if (!NearPath(gFadeAim.at, held)) {
+		gFadeAim.pending = false;
+		return kNoErr;
+	}
+	int index = AnchorOrNew(held, gFadeAim.at);
+	gFadeAim.pending = false;
+	if (index < 0 || index >= (int)held.segs.pts.size()) return kNoErr;
+	int n = (int)held.segs.pts.size();
+	int next = index + 1;
+	if (next >= n) next = held.segs.closed ? 0 : index;
+	int prev = index - 1;
+	if (prev < 0) prev = held.segs.closed ? n - 1 : 0;
+	AIRealPoint dir = next != index ? Depart(held.segs.pts[index], held.segs.pts[next]) : Arrive(held.segs.pts[prev], held.segs.pts[index]);
+	AIRealPoint unit = UnitPoint(dir);
+	if (LengthPoint(unit) < 0.5) return kNoErr;
+	AIRealPoint left;
+	left.h = -unit.v;
+	left.v = unit.h;
+	AIRealPoint delta = SubPoint(sideClick, held.segs.pts[index].p);
+	if (delta.h * left.h + delta.v * left.v < 0) {
+		left.h = -left.h;
+		left.v = -left.v;
+	}
+	return Overlap(held.path, held.segs, index, &left);
+}
+
+ASErr OverlapClick(const AIRealPoint& cursor, const AIEvent* event)
+{
+	ToolSettings cfg = LoadToolSettings();
+	PathPick pick;
+	AIRealPoint aim = cursor;
+	bool on = NearPath(cursor, pick);
+	if (cfg.fadeIn && gFadeAim.pending && !on) return ApplyFadeSide(cursor);
+	if (!on) {
+		aim = SnapCursor(cursor, event);
+		on = NearPath(aim, pick);
+	}
+	if (!on) return kNoErr;
+	if (cfg.fadeIn) {
+		gFadeAim.pending = true;
+		gFadeAim.at = PathPoint(pick, aim);
+		SelectArt(pick.path);
+		int existing = NearestAnchor(pick.segs, gFadeAim.at);
+		if (existing >= 0) sAIPath->SetPathSegmentSelected(pick.path, (ai::int16)existing, kSegmentPointSelected);
+		return kNoErr;
+	}
+	gFadeAim.pending = false;
+	int index = AnchorOrNew(pick, cursor);
+	if (index < 0) index = AnchorOrNew(pick, aim);
+	if (index < 0 || index >= (int)pick.segs.pts.size()) return kNoErr;
+	return Overlap(pick.path, pick.segs, index, NULL);
+}
+
 ASErr EditPathAt(PathEditKind kind, const AIRealPoint& cursor, const AIEvent* event)
 {
+	if (kind == kEditOverlap) return OverlapClick(cursor, event);
+	gFadeAim.pending = false;
 	PathPick pick;
 	AIRealPoint aim = cursor;
 	if (!PickPath(cursor, pick, true)) {
@@ -977,7 +1064,6 @@ ASErr EditPathAt(PathEditKind kind, const AIRealPoint& cursor, const AIEvent* ev
 	int index = AnchorOrNew(pick, cursor);
 	if (index < 0) index = AnchorOrNew(pick, aim);
 	if (index < 0 || index >= (int)pick.segs.pts.size()) return kNoErr;
-	if (kind == kEditOverlap) return Overlap(pick.path, pick.segs, index);
 	if (kind == kEditCutOver) return CutOver(pick.path, pick.segs, index);
 	return SplitInward(pick.path, pick.segs, index);
 }
@@ -987,6 +1073,17 @@ int CursorMode(const AIRealPoint& cursor)
 	PathPick pick;
 	if (!PickPath(cursor, pick, false)) return 0;
 	return NearestAnchor(pick.segs, cursor) >= 0 ? 2 : 1;
+}
+
+int OverlapCursorMode(const AIRealPoint& cursor)
+{
+	if (gFadeAim.pending && LoadToolSettings().fadeIn) {
+		PathPick pick;
+		CurveHit on;
+		bool onPath = PickPath(cursor, pick, false) && ClosestOnPath(pick.segs, cursor, 1.0e9f, on) && on.dist <= ReachForPixels(8);
+		if (!onPath) return 1;
+	}
+	return CursorMode(cursor);
 }
 
 namespace {
