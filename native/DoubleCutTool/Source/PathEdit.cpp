@@ -766,15 +766,23 @@ ASErr Overlap(AIArtHandle path, Segs segs, int index)
 	bool fade = cfg.fadeIn;
 	if (segs.closed) {
 		Segs open = OpenAt(segs, index);
-		std::vector<AIPathSegment> endClip = ClipForward(open.pts, dist);
-		std::vector<AIPathSegment> startClip = TakeInto(open.pts, false, dist);
-		if (endClip.size() >= 2) Attach(open.pts, false, endClip);
-		if (startClip.size() >= 2) Attach(open.pts, true, startClip);
+		std::vector<AIPathSegment> fromClick, toClick;
+		if (!SplitAtHalf(open.pts, fromClick, toClick)) return kNoErr;
+		Segs left;
+		Segs right;
+		left.closed = false;
+		right.closed = false;
+		left.pts.swap(toClick);
+		right.pts.swap(fromClick);
+		std::vector<AIPathSegment> endClip = ClipForward(right.pts, dist);
+		std::vector<AIPathSegment> startClip = TakeInto(left.pts, false, dist);
+		if (endClip.size() >= 2) Attach(left.pts, false, endClip);
+		if (startClip.size() >= 2) Attach(right.pts, true, startClip);
 		if (fade) {
-			FadeTip(open.pts, true, steep, handle, outside);
-			FadeTip(open.pts, false, steep, handle, outside);
+			FadeTip(left.pts, false, steep, handle, outside);
+			FadeTip(right.pts, true, steep, handle, outside);
 		}
-		return ReplaceWith(path, open, "Overlap");
+		return ReplaceWithTwo(path, left, right, "Overlap");
 	}
 	int last = (int)segs.pts.size() - 1;
 	if (index <= 0) {
