@@ -124,13 +124,27 @@ function runPython(args, done) {
     });
 }
 
+var evalQueue = [];
+var evalRunning = false;
+
 function evalHost(call, done) {
-    cs.evalScript(call, function (result) {
+    evalQueue.push({ call: call, done: done });
+    pumpEval();
+}
+
+function pumpEval() {
+    var item;
+    if (evalRunning || !evalQueue.length) return;
+    evalRunning = true;
+    item = evalQueue.shift();
+    cs.evalScript(item.call, function (result) {
         var msg = unwrap(result);
-        if (call.indexOf("sweepEmptyLayers") !== 0 || (msg.indexOf("ok 0") !== 0 && msg !== "nodoc")) {
-            logLine("eval " + call.slice(0, 220) + " -> " + String(msg).slice(0, 300));
+        if (item.call.indexOf("sweepEmptyLayers") !== 0 || (msg.indexOf("ok 0") !== 0 && msg !== "nodoc")) {
+            logLine("eval " + item.call.slice(0, 220) + " -> " + String(msg).slice(0, 300));
         }
-        done(msg);
+        evalRunning = false;
+        item.done(msg);
+        pumpEval();
     });
 }
 
@@ -1030,6 +1044,7 @@ function sendJob() {
 
 function plot() {
     if (busy) return;
+    setStatus("Sende...");
     commitColorSettings(function (msg) {
         if (msg === "nodoc") {
             setStatus("Kein Dokument offen.");
@@ -1042,8 +1057,7 @@ function plot() {
         readFields();
         saveLibrary();
         setBusy(true);
-    setStatus("Sende...");
-    refreshColors(function (added, err) {
+        refreshColors(function (added, err) {
         if (err === "nodoc") {
             setBusy(false);
             setStatus("Kein Dokument offen.");
@@ -2353,7 +2367,7 @@ if (!nodeRequire) {
         });
     }
     setInterval(function () {
-        if (busy) return;
+        if (busy || evalRunning || evalQueue.length) return;
         var active = document.activeElement;
         if (active && (active.tagName === "INPUT" || active.tagName === "SELECT")) return;
         evalHost("sweepEmptyLayers(true)", function (msg) {

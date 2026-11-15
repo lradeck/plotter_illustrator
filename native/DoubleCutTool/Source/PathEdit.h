@@ -17,4 +17,10 @@ int CursorMode(const AIRealPoint& cursor);
 
 ASErr EditToolOptions(PathEditKind kind);
 
+// Reverses every selected path. Does nothing when no path is selected.
+ASErr ReverseSelectedPaths();
+
+// Reverses only the path under the cursor, the way Direct Selection targets one path.
+ASErr ReverseClickedPath(const AIRealPoint& cursor, const AIEvent* event);
+
 #endif

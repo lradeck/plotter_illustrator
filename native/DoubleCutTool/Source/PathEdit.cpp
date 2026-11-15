@@ -877,3 +877,89 @@ int CursorMode(const AIRealPoint& cursor)
 	if (!PickPath(cursor, pick, false)) return 0;
 	return NearestAnchor(pick.segs, cursor) >= 0 ? 2 : 1;
 }
+
+namespace {
+
+ai::int32 ReverseArt(AIArtHandle art)
+{
+	if (!art) return 0;
+	short type = 0;
+	if (sAIArt->GetArtType(art, &type) != kNoErr) return 0;
+	ai::int32 attr = 0;
+	if (sAIArt->GetArtUserAttr(art, kArtLocked | kArtHidden, &attr) != kNoErr) return 0;
+	if (attr & (kArtLocked | kArtHidden)) return 0;
+	if (type == kPathArt) {
+		AIBoolean guide = false;
+		if (sAIPath->GetPathGuide(art, &guide) != kNoErr || guide) return 0;
+		return sAIPath->ReversePathDirection(art) == kNoErr ? 1 : 0;
+	}
+	if (type != kGroupArt && type != kCompoundPathArt) return 0;
+	ai::int32 changed = 0;
+	AIArtHandle child = NULL;
+	if (sAIArt->GetArtFirstChild(art, &child) != kNoErr) return 0;
+	while (child) {
+		changed += ReverseArt(child);
+		AIArtHandle next = NULL;
+		if (sAIArt->GetArtSibling(child, &next) != kNoErr) break;
+		child = next;
+	}
+	return changed;
+}
+
+}
+
+ASErr ReverseSelectedPaths()
+{
+	AIArtHandle** matches = NULL;
+	ai::int32 count = 0;
+	ASErr err = sAIMatchingArt->GetSelectedArt(&matches, &count);
+	if (err) return err;
+	ai::int32 changed = 0;
+	for (ai::int32 i = 0; i < count; ++i) changed += ReverseArt((*matches)[i]);
+	if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+	if (!changed) return kNoErr;
+	ai::UnicodeString undo("Undo Pfadrichtung umkehren");
+	ai::UnicodeString redo("Redo Pfadrichtung umkehren");
+	sAIUndo->SetUndoTextUS(undo, redo);
+	return kNoErr;
+}
+
+void SelectOnePath(AIArtHandle path)
+{
+	AIArtHandle** matches = NULL;
+	ai::int32 count = 0;
+	if (sAIMatchingArt->GetSelectedArt(&matches, &count) == kNoErr) {
+		for (ai::int32 i = 0; i < count; ++i) sAIArt->SetArtUserAttr((*matches)[i], kArtSelected, 0);
+		if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+	}
+	sAIArt->SetArtUserAttr(path, kArtSelected, kArtSelected);
+	ai::int16 points = 0;
+	if (sAIPath->GetPathSegmentCount(path, &points) == kNoErr && points > 0) {
+		std::vector<ai::int16> selected(points, kSegmentPointSelected);
+		sAIPath->SetPathSegmentsSelected(path, 0, points, &selected[0]);
+	}
+	AIArtHandle parent = NULL;
+	if (sAIArt->GetArtParent(path, &parent) != kNoErr) return;
+	while (parent) {
+		sAIArt->SetArtUserAttr(parent, kArtSelected, 0);
+		AIArtHandle next = NULL;
+		if (sAIArt->GetArtParent(parent, &next) != kNoErr) break;
+		parent = next;
+	}
+}
+
+ASErr ReverseClickedPath(const AIRealPoint& cursor, const AIEvent* event)
+{
+	PathPick pick;
+	AIRealPoint aim = cursor;
+	if (!PickPath(cursor, pick, true)) {
+		aim = SnapCursor(cursor, event);
+		if (!PickPath(aim, pick, true)) return kNoErr;
+	}
+	if (!ReverseArt(pick.path)) return kNoErr;
+	SelectOnePath(pick.path);
+	ai::UnicodeString undo("Undo Pfadrichtung umkehren");
+	ai::UnicodeString redo("Redo Pfadrichtung umkehren");
+	sAIUndo->SetUndoTextUS(undo, redo);
+	return kNoErr;
+}

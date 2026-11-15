@@ -107,7 +107,7 @@ def anchor_top_left(paths):
     The pen draws first, then the knife. Cuts follow the layer stack: the
     top layer first, then the next, through the last layer. A second pass
     starts only after every path has been cut once. An open path is not
-    closed. Each path then starts at the end nearest the head.
+    closed. A cut keeps the direction it has in Illustrator.
     """
     points = [pt for path in paths for pt in path.get("points_mm") or []]
     if not points:
@@ -676,10 +676,10 @@ def _chain(paths):
             end = _geom_end(path)
             target = (end[0], end[1])
             continue
-        # A closed cut keeps its direction so the knife offset stays outside.
-        allow_reverse = (not closed) or path.get("mode") == "pen"
+        # A cut keeps the direction it has in Illustrator. A pen stroke
+        # may start at the nearer end so a number is drawn in one pass.
         path["points_mm"] = _start_toward(
-            path["points_mm"], closed, target, allow_reverse
+            path["points_mm"], closed, target, path.get("mode") == "pen"
         )
         if closed:
             end = path["points_mm"][0]
@@ -693,7 +693,7 @@ def _start_toward(points, closed, target, allow_reverse):
     if len(pts) < 2:
         return pts
     if not closed:
-        if _dist2_to(pts[-1], target) < _dist2_to(pts[0], target):
+        if allow_reverse and _dist2_to(pts[-1], target) < _dist2_to(pts[0], target):
             pts.reverse()
         return pts
     if allow_reverse:

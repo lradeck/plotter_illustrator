@@ -6,9 +6,11 @@
 #define kCutOverIconResID 19001
 #define kSplitInIconResID 19002
 #define kOverlapIconResID 19003
+#define kReverseIconResID 19004
 
 #define kCutOverToolName "Cut Over"
 #define kSplitInToolName "Split Inward"
 #define kOverlapToolName "Overlap"
+#define kReverseToolName "Pfadrichtung umkehren"
 
 #endif

@@ -3,6 +3,7 @@
 #include "PathEdit.h"
 #include "AIRuntime.h"
 #include "AIMenuGroups.h"
+#include "AIToolNames.h"
 #include "resource.h"
 
 #include <windows.h>
@@ -23,8 +24,8 @@ DoubleCutToolPlugin::DoubleCutToolPlugin(SPPluginRef pluginRef)
 	fShutdownNotifier(NULL),
 	fResourceMgr(NULL)
 {
-	fTool[0] = fTool[1] = fTool[2] = NULL;
-	fMenu[0] = fMenu[1] = fMenu[2] = NULL;
+	fTool[0] = fTool[1] = fTool[2] = fTool[3] = NULL;
+	fMenu[0] = fMenu[1] = fMenu[2] = fMenu[3] = NULL;
 	strncpy(fPluginName, kDoubleCutToolPluginName, kMaxStringLength);
 	fPluginName[kMaxStringLength - 1] = 0;
 }
@@ -53,7 +54,7 @@ ASErr DoubleCutToolPlugin::StartupPlugin(SPInterfaceMessage* message)
 	if (error) return error;
 	error = AddMenus(message);
 	if (error) return error;
-	return sAINotifier->AddNotifier(fPluginRef, kDoubleCutToolPluginName, kAIApplicationShutdownNotifier, &fShutdownNotifier);
+	return sAINotifier->AddNotifier(fPluginRef, "DoubleCut Shutdown", kAIApplicationShutdownNotifier, &fShutdownNotifier);
 }
 
 ASErr DoubleCutToolPlugin::PostStartupPlugin()
@@ -72,14 +73,15 @@ ASErr DoubleCutToolPlugin::Notify(AINotifierMessage* message)
 
 ASErr DoubleCutToolPlugin::AddTools(SPInterfaceMessage* message)
 {
-	const char* names[3] = { kCutOverToolName, kSplitInToolName, kOverlapToolName };
-	const char* titles[3] = {
+	const char* names[4] = { kCutOverToolName, kSplitInToolName, kOverlapToolName, kReverseToolName };
+	const char* titles[4] = {
 		"Cut over. Click a path, including between anchors. An anchor is added there and the path is cut over. Double-click for millimetres and the loop.",
 		"Split inward. Click a path, including between anchors. An anchor is added there and both cuts start at that point. Double-click for details.",
-		"Overlap. Click a path, including between anchors. An anchor is added there and the path is split like cut over. Each end continues along the path it leads into. Double-click for millimetres."
+		"Overlap. Click a path, including between anchors. An anchor is added there and the path is split like cut over. Each end continues along the path it leads into. Double-click for millimetres.",
+		"Pfadrichtung umkehren. Click one path, including inside a group, and its direction reverses. Assign the shortcut under Keyboard Shortcuts, Tools."
 	};
-	ai::uint32 icons[3] = { kCutOverIconResID, kSplitInIconResID, kOverlapIconResID };
-	for (int i = 0; i < 3; ++i) {
+	ai::uint32 icons[4] = { kCutOverIconResID, kSplitInIconResID, kOverlapIconResID, kReverseIconResID };
+	for (int i = 0; i < 4; ++i) {
 		AIAddToolData data;
 		data.title = ai::UnicodeString(names[i]);
 		data.tooltip = ai::UnicodeString(titles[i]);
@@ -96,8 +98,11 @@ ASErr DoubleCutToolPlugin::AddTools(SPInterfaceMessage* message)
 			found = sAITool->GetToolNumberFromName(names[0], &data.sameToolsetAs);
 			if (found) return found;
 		}
-		ASErr error = sAITool->AddTool(message->d.self, names[i], data, kToolWantsToTrackCursorOption, &fTool[i]);
+		ai::int32 options = kToolWantsToTrackCursorOption;
+		if (i == 3) options |= kToolWantsAlternateSelectionTool;
+		ASErr error = sAITool->AddTool(message->d.self, names[i], data, options, &fTool[i]);
 		if (error) return error;
+		if (i == 3) sAITool->SetAlternateSelectionToolName(fTool[i], kDirectSelectTool);
 	}
 	return kNoErr;
 }
@@ -114,25 +119,27 @@ ASErr DoubleCutToolPlugin::AddMenus(SPInterfaceMessage* message)
 	error = sAIMenu->AddMenuGroupAsSubMenu("DoubleCut Group", 0, parent, &group);
 	if (error) return error;
 
-	const char* labels[3] = { "Cut over", "Split inward", "Overlap" };
-	const char* keys[3] = { "DoubleCut Cut Over", "DoubleCut Split Inward", "DoubleCut Overlap" };
+	const char* labels[4] = { "Cut over", "Split inward", "Overlap", "Pfadrichtung umkehren" };
+	const char* keys[4] = { "DoubleCut Cut Over", "DoubleCut Split Inward", "DoubleCut Overlap", "DoubleCut Reverse Path" };
 	const char cmds[3] = { 'C', 'S', 'O' };
 	ai::int16 mods = (ai::int16)(kMenuItemCmdControlModifier | kMenuItemCmdOptionModifier | kMenuItemCmdShiftModifier);
-	for (int i = 0; i < 3; ++i) {
+	for (int i = 0; i < 4; ++i) {
 		AIPlatformAddMenuItemDataUS item;
 		item.groupName = "DoubleCut Group";
 		item.itemText = ai::UnicodeString(labels[i]);
 		error = sAIMenu->AddMenuItem(message->d.self, keys[i], &item, 0, &fMenu[i]);
 		if (error) return error;
-		error = sAIMenu->SetItemCmd(fMenu[i], cmds[i], mods);
-		if (error) return error;
+		if (i < 3) {
+			error = sAIMenu->SetItemCmd(fMenu[i], cmds[i], mods);
+			if (error) return error;
+		}
 	}
 	return kNoErr;
 }
 
 ASErr DoubleCutToolPlugin::GoMenuItem(AIMenuMessage* message)
 {
-	for (int i = 0; i < 3; ++i) {
+	for (int i = 0; i < 4; ++i) {
 		if (message->menuItem == fMenu[i] && fTool[i]) return sAITool->SetSelectedTool(fTool[i]);
 	}
 	return kNoErr;
@@ -146,6 +153,7 @@ int DoubleCutToolPlugin::ToolIndex(AIToolHandle tool) const
 
 ASErr DoubleCutToolPlugin::EditTool(AIToolMessage* message)
 {
+	if (message->tool == fTool[3]) return kNoErr;
 	return EditToolOptions((PathEditKind)ToolIndex(message->tool));
 }
 
@@ -183,13 +191,36 @@ static HCURSOR MakeCursor(int kind)
 	BYTE xorPlane[128];
 	memset(andPlane, 0xFF, sizeof andPlane);
 	memset(xorPlane, 0x00, sizeof xorPlane);
-	for (int i = 1; i < 31; ++i) {
-		PaintCursorBit(andPlane, xorPlane, 15, i, false);
-		PaintCursorBit(andPlane, xorPlane, 16, i, true);
-		PaintCursorBit(andPlane, xorPlane, i, 15, false);
-		PaintCursorBit(andPlane, xorPlane, i, 16, true);
+	if (kind < 3) {
+		for (int i = 1; i < 31; ++i) {
+			PaintCursorBit(andPlane, xorPlane, 15, i, false);
+			PaintCursorBit(andPlane, xorPlane, 16, i, true);
+			PaintCursorBit(andPlane, xorPlane, i, 15, false);
+			PaintCursorBit(andPlane, xorPlane, i, 16, true);
+		}
+	}
+	else {
+		for (int i = 0; i < 14; ++i) {
+			PaintCursorBit(andPlane, xorPlane, 4, 4 + i, false);
+			PaintCursorBit(andPlane, xorPlane, 4 + i, 4, false);
+			if (i > 0 && i < 13) PaintCursorBit(andPlane, xorPlane, 5, 4 + i, true);
+		}
+		for (int i = 0; i < 11; ++i) PaintCursorBit(andPlane, xorPlane, 5 + i, 15, false);
+		for (int y = 5; y < 15; ++y) {
+			for (int x = 5; x < 4 + (15 - y); ++x) PaintCursorBit(andPlane, xorPlane, x, y, true);
+		}
 	}
 	if (kind == 1 || kind == 2) PaintPlus(andPlane, xorPlane, 24, 24);
+	if (kind == 4 || kind == 5) {
+		for (int y = 16; y <= 21; ++y) {
+			for (int x = 16; x <= 21; ++x) {
+				bool edge = x == 16 || x == 21 || y == 16 || y == 21;
+				if (kind == 5 && !edge) continue;
+				PaintCursorBit(andPlane, xorPlane, x, y, kind == 4 && !edge);
+				if (edge) PaintCursorBit(andPlane, xorPlane, x, y, false);
+			}
+		}
+	}
 	if (kind == 2) {
 		for (int y = 8; y <= 23; ++y) {
 			for (int x = 8; x <= 23; ++x) {
@@ -200,7 +231,8 @@ static HCURSOR MakeCursor(int kind)
 			}
 		}
 	}
-	return CreateCursor(NULL, 15, 15, 32, 32, andPlane, xorPlane);
+	int hot = kind >= 3 ? 4 : 15;
+	return CreateCursor(NULL, hot, hot, 32, 32, andPlane, xorPlane);
 }
 
 ASErr DoubleCutToolPlugin::TrackToolCursor(AIToolMessage* message)
@@ -209,9 +241,10 @@ ASErr DoubleCutToolPlugin::TrackToolCursor(AIToolMessage* message)
 	AIDocumentViewHandle view = NULL;
 	if (message->event && sAIDocumentView->GetNthDocumentView(0, &view) == kNoErr && view)
 		sAICursorSnap->HitTrack(view, message->cursor, message->event, "A v o", &at, true);
-	static HCURSOR cursors[3] = { NULL, NULL, NULL };
+	static HCURSOR cursors[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
 	int mode = CursorMode(message->cursor);
 	if (mode < 0 || mode > 2) mode = 0;
+	if (message->tool == fTool[3]) mode += 3;
 	if (!cursors[mode]) cursors[mode] = MakeCursor(mode);
 	if (cursors[mode]) SetCursor(cursors[mode]);
 	return kNoErr;
@@ -219,5 +252,6 @@ ASErr DoubleCutToolPlugin::TrackToolCursor(AIToolMessage* message)
 
 ASErr DoubleCutToolPlugin::ToolMouseDown(AIToolMessage* message)
 {
+	if (message->tool == fTool[3]) return ReverseClickedPath(message->cursor, message->event);
 	return EditPathAt((PathEditKind)ToolIndex(message->tool), message->cursor, message->event);
 }

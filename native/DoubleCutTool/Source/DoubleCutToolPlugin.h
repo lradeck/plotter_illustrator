@@ -26,8 +26,8 @@ protected:
 	virtual ASErr ToolMouseDown(AIToolMessage* message);
 
 private:
-	AIToolHandle fTool[3];
-	AIMenuItemHandle fMenu[3];
+	AIToolHandle fTool[4];
+	AIMenuItemHandle fMenu[4];
 	AINotifierHandle fShutdownNotifier;
 	AIResourceManagerHandle fResourceMgr;
 

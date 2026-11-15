@@ -647,7 +647,7 @@ function applyColorName(r, g, b, layerName) {
         if (!items.length) return "ok 0";
         var seen = [];
         var count = 0;
-        var i, item, layer, sub, before, after;
+        var i, item, layer, before, after;
         for (i = 0; i < items.length; i++) {
             item = items[i];
             layer = item.layer;
@@ -655,32 +655,19 @@ function applyColorName(r, g, b, layerName) {
                 logLine("apply item without layer");
                 continue;
             }
-            unlockLayer(layer);
-            if (layerIsOnlyColor(layer, want)) {
-                if (layerSeen(seen, layer)) continue;
-                seen.push(layer);
-                before = String(layer.name);
-                if (before !== layerName) layer.name = layerName;
-                after = String(layer.name);
-                logLine("rename '" + before + "' -> '" + after + "'");
-                if (after !== layerName) return "ERR Ebene blieb '" + clean(after) + "'";
-                count++;
-            } else {
-                sub = onlyColorChild(layer, layerName, want);
-                if (!sub) {
-                    sub = layer.layers.add();
-                    sub.name = layerName;
-                    logLine("sublayer '" + layerName + "' under '" + layer.name + "'");
-                }
-                unlockLayer(sub);
-                if (item.layer !== sub) {
-                    before = String(item.layer.name);
-                    item.move(sub, ElementPlacement.PLACEATEND);
-                    logLine("moved from '" + before + "' to '" + sub.name + "'");
-                }
-                if (String(sub.name) !== layerName) return "ERR Ebene blieb '" + clean(sub.name) + "'";
-                count++;
+            if (layerSeen(seen, layer)) continue;
+            seen.push(layer);
+            if (!pageItemsOnlyColor(layer, want)) {
+                logLine("leave mixed layer '" + layer.name + "'");
+                continue;
             }
+            unlockLayer(layer);
+            before = String(layer.name);
+            if (before !== layerName) layer.name = layerName;
+            after = String(layer.name);
+            logLine("rename '" + before + "' -> '" + after + "'");
+            if (after !== layerName) return "ERR Ebene blieb '" + clean(after) + "'";
+            count++;
         }
         try { app.redraw(); } catch (eRedraw) { logLine("redraw " + eRedraw.message); }
         return "ok " + count;
@@ -707,15 +694,6 @@ function unlockLayer(layer) {
     }
 }
 
-function onlyColorChild(parent, name, want) {
-    var i, layer;
-    for (i = 0; i < parent.layers.length; i++) {
-        layer = parent.layers[i];
-        if (layer.name === name && layerIsOnlyColor(layer, want)) return layer;
-    }
-    return null;
-}
-
 function collectColored(container, want, items) {
     var pageItems, i, it, rgb;
     if (container.layers) {
@@ -732,14 +710,6 @@ function collectColored(container, want, items) {
             if (rgb && rgbKey(rgb) === want) items.push(it);
         }
     }
-}
-
-function layerIsOnlyColor(layer, want) {
-    var i;
-    for (i = 0; i < layer.layers.length; i++) {
-        if (!layerIsOnlyColor(layer.layers[i], want)) return false;
-    }
-    return pageItemsOnlyColor(layer, want);
 }
 
 function pageItemsOnlyColor(container, want) {
