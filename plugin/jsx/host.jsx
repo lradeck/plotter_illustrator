@@ -31,6 +31,18 @@ function two(n) {
     return (n < 10 ? "0" : "") + n;
 }
 
+function reportProgress(fraction, label) {
+    try {
+        var file = new File("C:/Users/Leon/Downloads/doublecut/progress.txt");
+        file.encoding = "UTF-8";
+        if (!(fraction > 0)) fraction = 0;
+        if (fraction > 1) fraction = 1;
+        if (!file.open("w")) return;
+        file.write(String(Math.round(fraction * 1000) / 1000) + "\n" + (label || ""));
+        file.close();
+    } catch (eProg) {}
+}
+
 function drawCard(jsonPath) {
     try {
         var job = readJson(jsonPath);
@@ -42,6 +54,7 @@ function drawCard(jsonPath) {
         var originY = board[3];
         var i, path, layer;
         for (i = 0; i < job.paths.length; i++) {
+            if (i % 4 === 0) reportProgress((i + 1) / job.paths.length, "Quadrat " + (i + 1) + " von " + job.paths.length);
             path = job.paths[i];
             layer = layerForPath(doc, path);
             drawPath(layer, path, originX, originY);
@@ -127,6 +140,7 @@ function collectJob(jobPath, blade, turn, selectedOnly, colorsPath, allowDefault
             if (found.paths[i].picked) anyPicked = true;
         }
         for (i = 0; i < found.paths.length; i++) {
+            if (i % 6 === 0) reportProgress(0.12 + 0.72 * (i + 1) / found.paths.length, "Pfad " + (i + 1) + " von " + found.paths.length);
             item = found.paths[i];
             if (onlyMarked) {
                 useItem = anyPicked ? item.picked : item.marked;
@@ -1311,6 +1325,7 @@ function editProcess(cutMm, overlapMm, offsetMm, steepMm, clearMm) {
         if (!(clearMm >= 0)) clearMm = 1;
         var specs = [];
         var i;
+        reportProgress(0.02, "Lese " + paths.length + " Pfade");
         for (i = 0; i < paths.length; i++) {
             try {
                 if (!paths[i].pathPoints || paths[i].pathPoints.length < 2) {
@@ -1321,6 +1336,7 @@ function editProcess(cutMm, overlapMm, offsetMm, steepMm, clearMm) {
                 specs.push({ closed: false, verts: [] });
                 continue;
             }
+            if (i % 3 === 0) reportProgress(0.02 + 0.05 * (i + 1) / paths.length, "Lese Pfad " + (i + 1) + " von " + paths.length);
             specs.push({ closed: paths[i].closed === true, verts: readVerts(paths[i]) });
         }
         var plan = planProcess(
@@ -1333,8 +1349,11 @@ function editProcess(cutMm, overlapMm, offsetMm, steepMm, clearMm) {
         );
         var made = 0;
         var created = [];
-        var s, src, neu;
+        var s, src, neu, strokeTotal;
+        strokeTotal = plan.strokes.length || 1;
+        reportProgress(0.84, "Schreibe Pfade");
         for (s = 0; s < plan.strokes.length; s++) {
+            if (s % 2 === 0) reportProgress(0.84 + 0.14 * (s + 1) / strokeTotal, "Schreibe " + (s + 1) + " von " + plan.strokes.length);
             src = paths[plan.strokes[s].source];
             neu = src.layer.pathItems.add();
             neu.closed = false;

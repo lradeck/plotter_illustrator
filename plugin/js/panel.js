@@ -108,6 +108,75 @@ function setBusy(value) {
     var buttons = document.querySelectorAll("button");
     var i;
     for (i = 0; i < buttons.length; i++) buttons[i].disabled = value;
+    if (!value) hideProgress();
+}
+
+var progressTimer = null;
+
+function progressFile() {
+    return "C:/Users/Leon/Downloads/doublecut/progress.txt";
+}
+
+function writeProgress(fraction, label) {
+    var fs = nodeRequire("fs");
+    try {
+        fs.writeFileSync(progressFile(), String(fraction) + "\n" + (label || ""));
+    } catch (eProg) {}
+    readProgress();
+}
+
+function showProgress(title) {
+    var screen = document.getElementById("busy-screen");
+    var bar = document.getElementById("busy-bar");
+    if (!screen || !bar) return;
+    document.getElementById("busy-title").textContent = title || "Arbeitet";
+    document.getElementById("busy-detail").textContent = "Startet...";
+    document.getElementById("busy-pct").textContent = "";
+    bar.style.width = "";
+    bar.className = "busy-bar unknown";
+    screen.className = "busy-screen open";
+    writeProgress(0, "Startet...");
+    if (progressTimer) clearInterval(progressTimer);
+    progressTimer = setInterval(readProgress, 180);
+}
+
+function readProgress() {
+    var fs = nodeRequire("fs");
+    var text, lines, frac, bar, pct;
+    bar = document.getElementById("busy-bar");
+    if (!bar) return;
+    try {
+        text = fs.readFileSync(progressFile(), "utf8");
+    } catch (eRead) {
+        return;
+    }
+    lines = String(text).split(/\r?\n/);
+    frac = parseFloat(lines[0]);
+    if (!isNaN(frac) && frac > 0) {
+        if (frac > 1) frac = 1;
+        pct = Math.round(frac * 100);
+        bar.className = "busy-bar";
+        bar.style.width = pct + "%";
+        document.getElementById("busy-pct").textContent = pct + "%";
+    }
+    if (lines.length > 1 && lines[1]) document.getElementById("busy-detail").textContent = lines[1];
+}
+
+function hideProgress() {
+    if (progressTimer) clearInterval(progressTimer);
+    progressTimer = null;
+    var screen = document.getElementById("busy-screen");
+    if (screen) screen.className = "busy-screen";
+}
+
+function runTracked(title, call, handle) {
+    setBusy(true);
+    showProgress(title);
+    evalHost(call, function (msg) {
+        handle(msg);
+        writeProgress(1, "Fertig");
+        refreshColors(function () { setBusy(false); });
+    });
 }
 
 function runPython(args, done) {
@@ -982,6 +1051,8 @@ function startSquares() {
     var args = cardArgs();
     if (!args) return;
     setBusy(true);
+    showProgress("Quadrate");
+    writeProgress(0.12, "Berechne Karte");
     setStatus("Zeichne Quadrate...");
     var jsonPath = tempPath("krafttest.json");
     runPython([PLOTTER_PY].concat(args).concat(["--json-out", jsonPath]), function (err) {
@@ -990,6 +1061,7 @@ function startSquares() {
             setStatus(err);
             return;
         }
+        writeProgress(0.45, "Zeichne Quadrate");
         evalHost("drawCard(" + jsString(jsonPath) + ")", function (msg) {
             setBusy(false);
             if (msg !== "ok") {
@@ -1007,6 +1079,7 @@ function sendJob() {
     var jobPath = tempPath("plotter_job.json");
     var marked = document.getElementById("marked").checked;
     var call = "collectJob(" + jsString(jobPath) + ",0.35," + turnMm() + "," + (marked ? "true" : "false") + "," + jsString(COLORS_FILE) + ")";
+    writeProgress(0.2, "Sammle Pfade");
     evalHost(call, function (msg) {
         if (msg === "nodoc") {
             setBusy(false);
@@ -1031,6 +1104,7 @@ function sendJob() {
         var host = document.getElementById("host").value.replace(/^\s+|\s+$/g, "");
         var port = document.getElementById("port").value.replace(/^\s+|\s+$/g, "");
         var sendArgs = [PLOTTER_PY, jobPath, "--host", host, "--port", port];
+        writeProgress(0.86, "Sende an den Plotter");
         runPython(sendArgs, function (err) {
             setBusy(false);
             if (err) setStatus(err);
@@ -1057,6 +1131,8 @@ function plot() {
         readFields();
         saveLibrary();
         setBusy(true);
+        showProgress("Plot");
+        writeProgress(0.08, "Farben lesen");
         refreshColors(function (added, err) {
         if (err === "nodoc") {
             setBusy(false);
@@ -1394,14 +1470,18 @@ function refreshSimulate() {
     readFields();
     saveLibrary();
     logLine("simulate refresh");
+    writeProgress(0.15, "Sammle Pfade");
     evalHost("collectJob(" + jsString(jobPath) + ",0.35," + turnMm() + "," + (marked ? "true" : "false") + "," + jsString(COLORS_FILE) + ",true)", function (msg) {
         if (msg.indexOf("ok ") !== 0) {
             document.getElementById("sim-tip").textContent = msg === "nodoc" ? "Kein Dokument offen." : msg;
+            setBusy(false);
             return;
         }
         try {
             var fs = nodeRequire("fs");
+            writeProgress(0.72, "Berechne Vorschau");
             runPython([PLOTTER_PY, jobPath, "--preview-out", previewPath], function (err) {
+                setBusy(false);
                 if (err) {
                     document.getElementById("sim-tip").textContent = err;
                     return;
@@ -1418,6 +1498,7 @@ function refreshSimulate() {
             });
         } catch (eSim) {
             logLine("simulate ERR " + eSim.message);
+            setBusy(false);
         }
     });
 }
@@ -2021,13 +2102,12 @@ function runCutOver() {
     var mm = numberValue("cutover", 0);
     var loop = document.getElementById("connect-loops").checked ? numberValue("loop-size", 2) : 0;
     logLine("cutover click " + mm + " loop " + loop);
-    evalHost("addCutOver(" + mm + "," + loop + ",0)", function (msg) {
+    runTracked("Cut over", "addCutOver(" + mm + "," + loop + ",0)", function (msg) {
         if (msg === "nodoc") setStatus("Kein Dokument offen.");
         else if (msg === "nosel") setStatus("Erst eine Form selektieren.");
         else if (msg === "none") setStatus("Keine Aussenecke gefunden.");
         else if (msg.indexOf("ok") === 0) setStatus("Cut over: " + msg.split(" ")[1] + " Pfade.");
         else setStatus(msg);
-        refreshColors(function () {});
     });
 }
 
@@ -2038,36 +2118,33 @@ function runProcess() {
     var steep = numberValue("process-steep", 5);
     var gap = numberValue("process-clear", 1);
     logLine("process cut " + cut + " overlap " + overlap + " offset " + offset + " steep " + steep + " clear " + gap);
-    evalHost("processForm(" + cut + "," + overlap + "," + offset + "," + steep + "," + gap + ")", function (msg) {
+    runTracked("Process", "processForm(" + cut + "," + overlap + "," + offset + "," + steep + "," + gap + ")", function (msg) {
         if (msg === "nodoc") setStatus("Kein Dokument offen.");
         else if (msg === "nosel") setStatus("Erst eine geschlossene Form selektieren.");
         else if (msg === "none") setStatus("Keine steile Ecke gefunden.");
         else if (msg.indexOf("ok") === 0) setStatus("Process: " + msg.split(" ")[1] + " Pfade.");
         else setStatus(msg);
-        refreshColors(function () {});
     });
 }
 
 function runOverlap() {
     var mm = numberValue("overlap", 0);
-    evalHost("addOverlap(" + mm + ")", function (msg) {
+    runTracked("Overlap", "addOverlap(" + mm + ")", function (msg) {
         if (msg === "nodoc") setStatus("Kein Dokument offen.");
         else if (msg === "nosel") setStatus("Zwei Pfade selektieren.");
         else if (msg === "none") setStatus("Keine Beruehrung gefunden.");
         else if (msg.indexOf("ok") === 0) setStatus("Overlap: " + msg.split(" ")[1] + " Pfade.");
         else setStatus(msg);
-        refreshColors(function () {});
     });
 }
 
 function runSplitInward() {
-    evalHost("splitInward()", function (msg) {
+    runTracked("Split inward", "splitInward()", function (msg) {
         if (msg === "nodoc") setStatus("Kein Dokument offen.");
         else if (msg === "nosel") setStatus("Erst eine Form selektieren.");
         else if (msg === "none") setStatus("Keine Innen-Spitze gefunden.");
         else if (msg.indexOf("ok") === 0) setStatus("Innen-Spitzen: " + msg.split(" ")[1] + " Pfade.");
         else setStatus(msg);
-        refreshColors(function () {});
     });
 }
 
@@ -2075,12 +2152,11 @@ function runSplitForm() {
     var deg = Math.round(numberValue("split-detail", 20));
     logLine("split click " + deg);
     if (splitPreviewTimer) clearTimeout(splitPreviewTimer);
-    evalHost("splitForm(" + deg + ")", function (msg) {
+    runTracked("Detailgrad", "splitForm(" + deg + ")", function (msg) {
         if (msg === "nodoc") setStatus("Kein Dokument offen.");
         else if (msg === "nosel") setStatus("Erst eine Form selektieren.");
         else if (msg.indexOf("ok") === 0) setStatus("Geteilt: " + msg);
         else setStatus(msg);
-        refreshColors(function () {});
     });
 }
 
@@ -2290,7 +2366,10 @@ document.getElementById("history-delete").addEventListener("click", function () 
 });
 document.getElementById("history-template").addEventListener("click", applyHistoryTemplate);
 document.getElementById("simulate").addEventListener("click", function () {
+    if (busy) return;
     openSheet("simulate-sheet");
+    setBusy(true);
+    showProgress("Simulate");
     commitColorSettings(function () { refreshSimulate(); });
 });
 document.getElementById("simulate-close").addEventListener("click", function () {

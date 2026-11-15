@@ -26,5 +26,6 @@ Unbenannt.png
 Thumbs.db
 Desktop.ini
 *.log
+progress.txt
 tests/boot.html
 tests/chrome-profile/

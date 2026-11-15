@@ -1130,11 +1130,22 @@ function distToLine(p, line) {
     return Math.sqrt(ex * ex + ey * ey);
 }
 
+var progressFloor = 0;
+var progressCeil = 1;
+var progressLabel = "";
+
+function noteProgress(local) {
+    if (typeof reportProgress !== "function") return;
+    if (!(local > 0)) local = 0;
+    if (local > 1) local = 1;
+    reportProgress(progressFloor + (progressCeil - progressFloor) * local, progressLabel);
+}
+
 function planProcess(specs, extendPt, overlapPt, offsetPt, steepPt, clearPt) {
     var strokes = [];
     var remove = [];
     var world = [];
-    var i, spec, breaks, runs, r, made, outline, area, gap, k, others;
+    var i, spec, breaks, runs, r, made, outline, area, gap, k, others, formTotal, formNo, runTotal;
     if (!specs) return { strokes: strokes, remove: remove };
     gap = clearPt > 0 ? clearPt : 0;
     for (i = 0; i < specs.length; i++) {
@@ -1142,11 +1153,22 @@ function planProcess(specs, extendPt, overlapPt, offsetPt, steepPt, clearPt) {
         if (!spec || !spec.closed || !spec.verts || spec.verts.length < 4) world.push(null);
         else world.push(formOutline(spec.verts));
     }
+    formTotal = 0;
+    formNo = 0;
+    for (i = 0; i < world.length; i++) if (world[i]) formTotal++;
+    if (!(formTotal > 0)) formTotal = 1;
     for (i = 0; i < specs.length; i++) {
         if (!world[i]) continue;
+        formNo++;
         spec = specs[i];
+        progressLabel = "Form " + formNo + " von " + formTotal;
         breaks = markSteepCorners(spec.verts);
-        if (breaks.length < 2) continue;
+        if (breaks.length < 2) {
+            progressFloor = 0.08 + (formNo - 1) / formTotal * 0.74;
+            progressCeil = 0.08 + formNo / formTotal * 0.74;
+            noteProgress(1);
+            continue;
+        }
         outline = world[i];
         others = [];
         for (k = 0; k < world.length; k++) {
@@ -1155,8 +1177,13 @@ function planProcess(specs, extendPt, overlapPt, offsetPt, steepPt, clearPt) {
         outline.others = others;
         area = ringArea(spec.verts);
         runs = closedRuns(spec.verts, breaks);
+        runTotal = runs.length || 1;
         for (r = 0; r < runs.length; r++) {
+            progressFloor = 0.08 + ((formNo - 1) + r / runTotal) / formTotal * 0.74;
+            progressCeil = 0.08 + ((formNo - 1) + (r + 1) / runTotal) / formTotal * 0.74;
+            noteProgress(0);
             made = finishProcessRun(runs[r], area, outline, extendPt, overlapPt, offsetPt, steepPt, gap);
+            noteProgress(1);
             for (var s = 0; s < made.length; s++) strokes.push({ source: i, verts: made[s] });
         }
         if (runs.length) remove.push(i);
@@ -1265,7 +1292,12 @@ function placeFade(pts, area, outline, overlapPt, offsetPt, steepPt, clearPt) {
     }
     best = null;
     step = Math.max((hi - lo) / 16, 1);
+    var fadeStep = 0;
+    var fadeExpect = Math.ceil((hi - lo) / step) + 1;
+    if (!(fadeExpect > 0)) fadeExpect = 1;
     for (d = lo; d <= hi + step * 0.2; d += step) {
+        noteProgress(fadeStep / fadeExpect);
+        fadeStep++;
         scale = largestFadeScale(pts, area, outline, overlap, offsetPt, steepPt, d, clearPt);
         if (!(scale > 0.05)) continue;
         gap = fadeGapAt(pts, area, outline, overlap, offsetPt * scale, steepPt * scale, d);
