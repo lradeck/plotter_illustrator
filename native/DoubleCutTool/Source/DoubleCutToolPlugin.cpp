@@ -77,7 +77,7 @@ ASErr DoubleCutToolPlugin::AddTools(SPInterfaceMessage* message)
 	const char* titles[4] = {
 		"Cut over. Click a path, including between anchors. An anchor is added there and the path is cut over. Double-click for millimetres and the loop.",
 		"Split inward. Click a path, including between anchors. An anchor is added there and both cuts start at that point. Double-click for details.",
-		"Overlap. Click a path. Each end continues along the path it leads into. With fade in, click the path, then click the side the curve should leave toward. Double-click for settings.",
+		"Overlap. Click a path. Each end continues along the path it leads into. With fade in, click the path, then drag the side: along the path sets curve offset, away from it sets steepness. Double-click for settings.",
 		"Pfadrichtung umkehren. Click one path, including inside a group, and its direction reverses. Assign the shortcut under Keyboard Shortcuts, Tools."
 	};
 	ai::uint32 icons[4] = { kCutOverIconResID, kSplitInIconResID, kOverlapIconResID, kReverseIconResID };
@@ -254,4 +254,16 @@ ASErr DoubleCutToolPlugin::ToolMouseDown(AIToolMessage* message)
 {
 	if (message->tool == fTool[3]) return ReverseClickedPath(message->cursor, message->event);
 	return EditPathAt((PathEditKind)ToolIndex(message->tool), message->cursor, message->event);
+}
+
+ASErr DoubleCutToolPlugin::ToolMouseDrag(AIToolMessage* message)
+{
+	if (message->tool == fTool[2]) return DragFadePreview(message->cursor);
+	return kNoErr;
+}
+
+ASErr DoubleCutToolPlugin::ToolMouseUp(AIToolMessage* message)
+{
+	if (message->tool == fTool[2]) return FinishFadePreview(message->cursor);
+	return kNoErr;
 }

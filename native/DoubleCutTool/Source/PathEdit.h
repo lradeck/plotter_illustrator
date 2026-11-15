@@ -18,6 +18,10 @@ int CursorMode(const AIRealPoint& cursor);
 // Same as CursorMode. While fade-in is waiting for the side click, returns 1 off the path.
 int OverlapCursorMode(const AIRealPoint& cursor);
 
+// Second click of fade-in: hold and drag. Along-path distance sets curve offset, off-path distance sets steepness.
+ASErr DragFadePreview(const AIRealPoint& cursor);
+ASErr FinishFadePreview(const AIRealPoint& cursor);
+
 ASErr EditToolOptions(PathEditKind kind);
 
 // Reverses every selected path. Does nothing when no path is selected.

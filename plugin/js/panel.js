@@ -1984,7 +1984,7 @@ var splitPreviewTimer = null;
 
 function openTool(which, title) {
     var previous = document.getElementById("tool-sheet").getAttribute("data-tool");
-    var groups = ["tool-cutover", "tool-inward", "tool-overlap", "tool-split"];
+    var groups = ["tool-cutover", "tool-inward", "tool-overlap", "tool-process", "tool-split"];
     var i;
     if (previous === "tool-split" && which !== "tool-split") dropSplitPreview();
     for (i = 0; i < groups.length; i++) {
@@ -2031,6 +2031,23 @@ function runCutOver() {
     });
 }
 
+function runProcess() {
+    var cut = numberValue("process-overcut", 6);
+    var overlap = numberValue("process-overlap", 4);
+    var offset = numberValue("process-offset", 6);
+    var steep = numberValue("process-steep", 5);
+    var gap = numberValue("process-clear", 1);
+    logLine("process cut " + cut + " overlap " + overlap + " offset " + offset + " steep " + steep + " clear " + gap);
+    evalHost("processForm(" + cut + "," + overlap + "," + offset + "," + steep + "," + gap + ")", function (msg) {
+        if (msg === "nodoc") setStatus("Kein Dokument offen.");
+        else if (msg === "nosel") setStatus("Erst eine geschlossene Form selektieren.");
+        else if (msg === "none") setStatus("Keine steile Ecke gefunden.");
+        else if (msg.indexOf("ok") === 0) setStatus("Process: " + msg.split(" ")[1] + " Pfade.");
+        else setStatus(msg);
+        refreshColors(function () {});
+    });
+}
+
 function runOverlap() {
     var mm = numberValue("overlap", 0);
     evalHost("addOverlap(" + mm + ")", function (msg) {
@@ -2069,6 +2086,7 @@ function runSplitForm() {
 
 document.getElementById("add-cutover").addEventListener("click", function () { openTool("tool-cutover", "Cut over"); });
 document.getElementById("split-inward").addEventListener("click", function () { openTool("tool-inward", "Split inward"); });
+document.getElementById("process-form").addEventListener("click", function () { openTool("tool-process", "Process"); });
 document.getElementById("add-overlap").addEventListener("click", function () { openTool("tool-overlap", "Overlap"); });
 document.getElementById("split-form").addEventListener("click", function () { openTool("tool-split", "Detailgrad"); });
 document.getElementById("split-detail").addEventListener("input", function () {
@@ -2092,6 +2110,7 @@ document.getElementById("tool-ok").addEventListener("click", function () {
     if (which === "tool-cutover") runCutOver();
     else if (which === "tool-inward") runSplitInward();
     else if (which === "tool-overlap") runOverlap();
+    else if (which === "tool-process") runProcess();
     else if (which === "tool-split") runSplitForm();
 });
 document.getElementById("color-load").addEventListener("click", loadColorConfig);

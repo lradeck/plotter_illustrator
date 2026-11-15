@@ -1130,6 +1130,778 @@ function distToLine(p, line) {
     return Math.sqrt(ex * ex + ey * ey);
 }
 
+function planProcess(specs, extendPt, overlapPt, offsetPt, steepPt, clearPt) {
+    var strokes = [];
+    var remove = [];
+    var world = [];
+    var i, spec, breaks, runs, r, made, outline, area, gap, k, others;
+    if (!specs) return { strokes: strokes, remove: remove };
+    gap = clearPt > 0 ? clearPt : 0;
+    for (i = 0; i < specs.length; i++) {
+        spec = specs[i];
+        if (!spec || !spec.closed || !spec.verts || spec.verts.length < 4) world.push(null);
+        else world.push(formOutline(spec.verts));
+    }
+    for (i = 0; i < specs.length; i++) {
+        if (!world[i]) continue;
+        spec = specs[i];
+        breaks = markSteepCorners(spec.verts);
+        if (breaks.length < 2) continue;
+        outline = world[i];
+        others = [];
+        for (k = 0; k < world.length; k++) {
+            if (k !== i && world[k]) others.push(world[k]);
+        }
+        outline.others = others;
+        area = ringArea(spec.verts);
+        runs = closedRuns(spec.verts, breaks);
+        for (r = 0; r < runs.length; r++) {
+            made = finishProcessRun(runs[r], area, outline, extendPt, overlapPt, offsetPt, steepPt, gap);
+            for (var s = 0; s < made.length; s++) strokes.push({ source: i, verts: made[s] });
+        }
+        if (runs.length) remove.push(i);
+    }
+    return { strokes: strokes, remove: remove };
+}
+
+function markSteepCorners(verts) {
+    var area = ringArea(verts);
+    var n = verts.length;
+    var breaks = [];
+    var i, prev, next, into, out, li, lo, cross, dot, turn, lenPrev, lenNext;
+    for (i = 0; i < n; i++) {
+        prev = verts[(i - 1 + n) % n];
+        next = verts[(i + 1) % n];
+        into = arrivalDir(prev, verts[i]);
+        out = departDir(verts[i], next);
+        li = Math.sqrt(into[0] * into[0] + into[1] * into[1]);
+        lo = Math.sqrt(out[0] * out[0] + out[1] * out[1]);
+        verts[i].role = "flat";
+        if (li < 0.2 || lo < 0.2) continue;
+        cross = into[0] * out[1] - into[1] * out[0];
+        dot = into[0] * out[0] + into[1] * out[1];
+        turn = Math.atan2(cross, dot) * 180 / Math.PI;
+        lenPrev = segmentLen(prev, verts[i]);
+        lenNext = segmentLen(verts[i], next);
+        if (Math.abs(turn) < 40) continue;
+        if (lenPrev < 8 && lenNext < 8) continue;
+        verts[i].role = cross * area >= 0 ? "out" : "in";
+        breaks.push(i);
+    }
+    return breaks;
+}
+
+function finishProcessRun(pts, area, outline, extendPt, overlapPt, offsetPt, steepPt, clearPt) {
+    var startRole, endRole, dir, back, dist;
+    if (!pts || pts.length < 2) return [];
+    startRole = pts[0].role;
+    endRole = pts[pts.length - 1].role;
+    if (startRole === "in" && endRole === "in") return overlapFadeRun(pts, area, outline, overlapPt, offsetPt, steepPt, clearPt);
+    if (startRole === "in" && endRole === "out") reverseRun(pts);
+    if (extendPt > 0 && pts[0].role === "out") {
+        dir = departDir(pts[0], pts[1]);
+        back = [-dir[0], -dir[1]];
+        dist = fitOutward(pts[0].anchor, back, extendPt, outline);
+        if (dist > 0.3) {
+            pts.unshift(pointBeyond(pts[0].anchor, back, dist));
+            pts[1].left = [pts[1].anchor[0], pts[1].anchor[1]];
+            pts[1].corner = true;
+        }
+    }
+    if (extendPt > 0 && pts[pts.length - 1].role === "out") {
+        dir = arrivalDir(pts[pts.length - 2], pts[pts.length - 1]);
+        dist = fitOutward(pts[pts.length - 1].anchor, dir, extendPt, outline);
+        if (dist > 0.3) {
+            pts.push(pointBeyond(pts[pts.length - 1].anchor, dir, dist));
+            pts[pts.length - 2].right = [pts[pts.length - 2].anchor[0], pts[pts.length - 2].anchor[1]];
+            pts[pts.length - 2].corner = true;
+        }
+    }
+    return [pts];
+}
+
+function overlapFadeRun(pts, area, outline, overlapPt, offsetPt, steepPt, clearPt) {
+    var fit, built;
+    if (pts.length < 2) return [];
+    fit = placeFade(pts, area, outline, overlapPt, offsetPt, steepPt, clearPt);
+    built = buildFadePair(pts, area, outline, fit.overlap, fit.offset, fit.steep, fit.where);
+    return built.length ? built : [pts];
+}
+
+function buildFadePair(pts, area, outline, overlapPt, offsetPt, steepPt, splitAt) {
+    var total, margin, d, left, right, travel, normal;
+    total = pathLength(pts);
+    if (total < 1) return [];
+    margin = overlapPt > 0 ? overlapPt : 0;
+    if (margin > total * 0.45) margin = total * 0.45;
+    d = splitAt;
+    if (!(d > margin && d < total - margin)) d = total * 0.5;
+    left = sliceRun(pts, 0, d + margin);
+    right = sliceRun(pts, Math.max(0, d - margin), total);
+    if (left.length < 2 || right.length < 2) return [];
+    travel = arrivalDir(left[left.length - 2], left[left.length - 1]);
+    normal = outsideNormal(left[left.length - 1].anchor, travel, area, outline);
+    fadeRunTip(left, false, steepPt, offsetPt, normal, outline);
+    travel = departDir(right[0], right[1]);
+    normal = outsideNormal(right[0].anchor, travel, area, outline);
+    fadeRunTip(right, true, steepPt, offsetPt, normal, outline);
+    reverseRun(left);
+    return [left, right];
+}
+
+function placeFade(pts, area, outline, overlapPt, offsetPt, steepPt, clearPt) {
+    var total, overlap, lo, hi, step, d, scale, gap, smooth, best;
+    total = pathLength(pts);
+    overlap = overlapPt > 0 ? overlapPt : 0;
+    if (overlap > total * 0.49) overlap = total * 0.49;
+    if (!(offsetPt > 0)) offsetPt = 0;
+    if (!(steepPt > 0)) steepPt = 0;
+    if (!(clearPt > 0)) clearPt = 0;
+    lo = overlap;
+    hi = total - overlap;
+    if (!(hi > lo + 0.4)) {
+        scale = largestFadeScale(pts, area, outline, overlap, offsetPt, steepPt, total * 0.5, clearPt);
+        return { overlap: overlap, offset: offsetPt * scale, steep: steepPt * scale, where: total * 0.5 };
+    }
+    best = null;
+    step = Math.max((hi - lo) / 16, 1);
+    for (d = lo; d <= hi + step * 0.2; d += step) {
+        scale = largestFadeScale(pts, area, outline, overlap, offsetPt, steepPt, d, clearPt);
+        if (!(scale > 0.05)) continue;
+        gap = fadeGapAt(pts, area, outline, overlap, offsetPt * scale, steepPt * scale, d);
+        smooth = curveScore(pts, Math.max(0, d - overlap), Math.min(total, d + overlap));
+        if (!best || scale > best.scale + 0.08 || (scale >= best.scale - 0.08 && (smooth < best.smooth - 0.02 || (smooth <= best.smooth + 0.02 && gap > best.gap)))) {
+            best = { scale: scale, gap: gap, smooth: smooth, where: d };
+        }
+    }
+    if (!best) best = { scale: 0, gap: 0, where: (lo + hi) / 2 };
+    return { overlap: overlap, offset: offsetPt * best.scale, steep: steepPt * best.scale, where: best.where };
+}
+
+function largestFadeScale(pts, area, outline, overlap, maxOffset, maxSteep, splitAt, clearPt) {
+    var lo = 0;
+    var hi = 1;
+    var mid, i;
+    if (fadeClear(pts, area, outline, overlap, maxOffset, maxSteep, splitAt, clearPt)) return 1;
+    for (i = 0; i < 6; i++) {
+        mid = (lo + hi) / 2;
+        if (fadeClear(pts, area, outline, overlap, maxOffset * mid, maxSteep * mid, splitAt, clearPt)) lo = mid;
+        else hi = mid;
+    }
+    return lo;
+}
+
+function fadeRoom(pts) {
+    return pathLength(pts) * 0.45;
+}
+
+function fadeClear(pts, area, outline, overlapPt, offsetPt, steepPt, splitAt, clearPt) {
+    var made, i;
+    made = buildFadePair(pts, area, outline, overlapPt, offsetPt, steepPt, splitAt);
+    for (i = 0; i < made.length; i++) {
+        if (fadeCutsForm(made[i], outline, clearPt, 6)) return false;
+    }
+    return true;
+}
+
+function straightSplit(pts, overlap) {
+    var total = pathLength(pts);
+    var lo, hi, d, step, best, bestLo, bestHi, score;
+    if (total < 1) return 0;
+    if (!(overlap > 0.5)) overlap = Math.min(total * 0.25, 1);
+    lo = overlap;
+    hi = total - overlap;
+    if (!(hi > lo + 0.5)) return total * 0.5;
+    best = 1e9;
+    bestLo = (lo + hi) / 2;
+    bestHi = bestLo;
+    step = Math.max((hi - lo) / 28, 0.75);
+    for (d = lo; d <= hi + step * 0.25; d += step) {
+        score = curveScore(pts, d - overlap, d + overlap);
+        if (score < best - 0.015) {
+            best = score;
+            bestLo = d;
+            bestHi = d;
+        } else if (score <= best + 0.015 && d - bestHi < step * 1.5) bestHi = d;
+    }
+    return (bestLo + bestHi) / 2;
+}
+
+function curveScore(pts, d0, d1) {
+    var span = d1 - d0;
+    var steps = 4;
+    var i, prev, cur, dot, cross, score;
+    if (span < 0.5) return 0;
+    prev = tangentAt(pts, d0);
+    score = 0;
+    for (i = 1; i <= steps; i++) {
+        cur = tangentAt(pts, d0 + span * i / steps);
+        dot = prev[0] * cur[0] + prev[1] * cur[1];
+        cross = prev[0] * cur[1] - prev[1] * cur[0];
+        score += Math.abs(Math.atan2(cross, dot));
+        prev = cur;
+    }
+    return score;
+}
+
+function tangentAt(pts, dist) {
+    var acc = 0;
+    var i, seg, t, dir, len;
+    if (dist < 0) dist = 0;
+    for (i = 0; i < pts.length - 1; i++) {
+        seg = bezierLength(pts[i], pts[i + 1]);
+        if (acc + seg < dist && i < pts.length - 2) {
+            acc += seg;
+            continue;
+        }
+        t = tAtLength(pts[i], pts[i + 1], dist - acc);
+        dir = bezierTangent(pts[i], pts[i + 1], t);
+        len = Math.sqrt(dir[0] * dir[0] + dir[1] * dir[1]);
+        if (len < 1e-6) return [1, 0];
+        return [dir[0] / len, dir[1] / len];
+    }
+    return [1, 0];
+}
+
+function bezierTangent(a, b, t) {
+    var p0 = a.anchor;
+    var p1 = a.right;
+    var p2 = b.left;
+    var p3 = b.anchor;
+    var u = 1 - t;
+    return [
+        3 * u * u * (p1[0] - p0[0]) + 6 * u * t * (p2[0] - p1[0]) + 3 * t * t * (p3[0] - p2[0]),
+        3 * u * u * (p1[1] - p0[1]) + 6 * u * t * (p2[1] - p1[1]) + 3 * t * t * (p3[1] - p2[1])
+    ];
+}
+
+function pathLength(pts) {
+    var n = 0;
+    var i;
+    for (i = 0; i < pts.length - 1; i++) n += bezierLength(pts[i], pts[i + 1]);
+    return n;
+}
+
+function bezierLength(a, b) {
+    var samples = sampleCubic(a.anchor, a.right, b.left, b.anchor);
+    var len = 0;
+    var i, dx, dy;
+    for (i = 1; i < samples.length; i++) {
+        dx = samples[i][0] - samples[i - 1][0];
+        dy = samples[i][1] - samples[i - 1][1];
+        len += Math.sqrt(dx * dx + dy * dy);
+    }
+    return len;
+}
+
+function tAtLength(a, b, dist) {
+    var total = bezierLength(a, b);
+    var lo = 0;
+    var hi = 1;
+    var mid, i, part, got;
+    if (dist <= 0 || total < 0.01) return 0;
+    if (dist >= total) return 1;
+    for (i = 0; i < 14; i++) {
+        mid = (lo + hi) / 2;
+        part = splitSegment(a, b, mid);
+        got = bezierLength(part.a, part.end);
+        if (got < dist) lo = mid;
+        else hi = mid;
+    }
+    return (lo + hi) / 2;
+}
+
+function sliceRun(pts, dist0, dist1) {
+    var cut, rest, second;
+    if (!pts || pts.length < 2 || dist1 < dist0) return [];
+    if (dist0 <= 0.2) {
+        cut = cutRun(pts, dist1);
+        return cut ? cut[0] : [];
+    }
+    cut = cutRun(pts, dist0);
+    if (!cut) return [];
+    rest = cut[1];
+    second = cutRun(rest, dist1 - dist0);
+    return second ? second[0] : rest;
+}
+
+function cutRun(pts, dist) {
+    var acc = 0;
+    var i, seg, t, part, first, second, k, total;
+    total = pathLength(pts);
+    if (dist >= total - 0.2) {
+        first = [];
+        for (k = 0; k < pts.length; k++) first.push(cloneVert(pts[k]));
+        return [first, [cloneVert(pts[pts.length - 1])]];
+    }
+    for (i = 0; i < pts.length - 1; i++) {
+        seg = bezierLength(pts[i], pts[i + 1]);
+        if (acc + seg < dist - 0.05 && i < pts.length - 2) {
+            acc += seg;
+            continue;
+        }
+        t = seg < 0.01 ? 0 : tAtLength(pts[i], pts[i + 1], dist - acc);
+        if (t < 0) t = 0;
+        if (t > 1) t = 1;
+        part = splitSegment(pts[i], pts[i + 1], t);
+        first = [];
+        second = [];
+        for (k = 0; k < i; k++) first.push(cloneVert(pts[k]));
+        first.push(part.a);
+        first.push(part.end);
+        second.push(part.start);
+        second.push(part.b);
+        for (k = i + 2; k < pts.length; k++) second.push(cloneVert(pts[k]));
+        return [first, second];
+    }
+    return null;
+}
+
+function longestSegmentStart(pts) {
+    var best = 0;
+    var bestLen = -1;
+    var i, len, index;
+    for (i = 0; i < pts.length - 1; i++) {
+        len = segmentLen(pts[i], pts[i + 1]);
+        if (len > bestLen) {
+            bestLen = len;
+            best = i;
+        }
+    }
+    index = best;
+    if (index < 1) index = 1;
+    if (index > pts.length - 2) index = pts.length - 2;
+    return index;
+}
+
+function extendRunEnd(pts, dist) {
+    var ext = extendForward(pts[pts.length - 2], pts[pts.length - 1], dist);
+    pts[pts.length - 1].right = [pts[pts.length - 1].anchor[0], pts[pts.length - 1].anchor[1]];
+    pts[pts.length - 1].corner = true;
+    pts.push(ext);
+}
+
+function extendRunStart(pts, dist) {
+    var dir = departDir(pts[0], pts[1]);
+    var ext = pointBeyond(pts[0].anchor, [-dir[0], -dir[1]], dist);
+    pts[0].left = [pts[0].anchor[0], pts[0].anchor[1]];
+    pts[0].corner = true;
+    pts.unshift(ext);
+}
+
+function outsideDir(dir, area) {
+    var len = Math.sqrt(dir[0] * dir[0] + dir[1] * dir[1]);
+    var left;
+    if (len < 0.01) return [0, area >= 0 ? -1 : 1];
+    left = [-dir[1] / len, dir[0] / len];
+    if (area >= 0) return [-left[0], -left[1]];
+    return left;
+}
+
+function outsideNormal(anchor, travel, area, outline) {
+    var normal = outsideDir(travel, area);
+    var probe = [anchor[0] + normal[0] * 1.5, anchor[1] + normal[1] * 1.5];
+    if (insideForm(probe, outline)) return [-normal[0], -normal[1]];
+    return normal;
+}
+
+function fitOutward(anchor, dir, maxDist, outline) {
+    var len, unit, lo, hi, mid, i;
+    len = Math.sqrt(dir[0] * dir[0] + dir[1] * dir[1]);
+    if (len < 0.01 || !(maxDist > 0)) return 0;
+    unit = [dir[0] / len, dir[1] / len];
+    if (extensionClear(anchor, unit, maxDist, outline)) return maxDist;
+    lo = 0;
+    hi = maxDist;
+    for (i = 0; i < 10; i++) {
+        mid = (lo + hi) / 2;
+        if (extensionClear(anchor, unit, mid, outline)) lo = mid;
+        else hi = mid;
+    }
+    return lo;
+}
+
+function extensionClear(anchor, unit, dist, outline) {
+    var steps, i, p;
+    if (dist < 0.2) return true;
+    steps = 8;
+    for (i = 1; i <= steps; i++) {
+        p = [anchor[0] + unit[0] * dist * i / steps, anchor[1] + unit[1] * dist * i / steps];
+        if (insideForm(p, outline)) return false;
+        if (i > 1 && nearOutline(p, outline, 0.5)) return false;
+    }
+    if (crossesOutline(anchor, [anchor[0] + unit[0] * dist, anchor[1] + unit[1] * dist], outline)) return false;
+    return true;
+}
+
+function formOutline(verts) {
+    var line = [];
+    var n = verts.length;
+    var i, s, t, u, a, b;
+    for (i = 0; i < n; i++) {
+        a = verts[i];
+        b = verts[(i + 1) % n];
+        for (s = 0; s < 4; s++) {
+            t = s / 4;
+            u = 1 - t;
+            line.push([
+                u * u * u * a.anchor[0] + 3 * u * u * t * a.right[0] + 3 * u * t * t * b.left[0] + t * t * t * b.anchor[0],
+                u * u * u * a.anchor[1] + 3 * u * u * t * a.right[1] + 3 * u * t * t * b.left[1] + t * t * t * b.anchor[1]
+            ]);
+        }
+    }
+    return line;
+}
+
+function insideForm(p, outline) {
+    var near, nx, ny, stepped;
+    if (!outline || outline.length < 3) return false;
+    near = closestOutline(p, outline);
+    if (near.dist <= 0.45) {
+        if (near.dist < 0.02) return false;
+        nx = (p[0] - near.point[0]) / near.dist;
+        ny = (p[1] - near.point[1]) / near.dist;
+        stepped = [p[0] + nx * 1.2, p[1] + ny * 1.2];
+        return rayInside(stepped, outline);
+    }
+    return rayInside(p, outline);
+}
+
+function rayInside(p, outline) {
+    var n = outline.length;
+    var i, a, b, cross;
+    cross = 0;
+    for (i = 0; i < n; i++) {
+        a = outline[i];
+        b = outline[(i + 1) % n];
+        if ((a[1] > p[1]) === (b[1] > p[1])) continue;
+        if (p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) cross++;
+    }
+    return cross % 2 === 1;
+}
+
+function closestOutline(p, outline) {
+    var n = outline.length;
+    var i, a, b, abx, aby, d, t, px, py, dist, best, bestPt;
+    best = 1e9;
+    bestPt = [p[0], p[1]];
+    for (i = 0; i < n; i++) {
+        a = outline[i];
+        b = outline[(i + 1) % n];
+        abx = b[0] - a[0];
+        aby = b[1] - a[1];
+        d = abx * abx + aby * aby;
+        if (d < 1e-6) continue;
+        t = ((p[0] - a[0]) * abx + (p[1] - a[1]) * aby) / d;
+        if (t < 0) t = 0;
+        else if (t > 1) t = 1;
+        px = a[0] + abx * t;
+        py = a[1] + aby * t;
+        dist = (px - p[0]) * (px - p[0]) + (py - p[1]) * (py - p[1]);
+        if (dist < best) {
+            best = dist;
+            bestPt = [px, py];
+        }
+    }
+    return { dist: Math.sqrt(best), point: bestPt };
+}
+
+function nearOutline(p, outline, tol) {
+    return closestOutline(p, outline).dist <= tol;
+}
+
+function crossesOutline(a, b, outline) {
+    var n = outline.length;
+    var i, c, d;
+    for (i = 0; i < n; i++) {
+        c = outline[i];
+        d = outline[(i + 1) % n];
+        if (segmentCrosses(a, b, c, d)) return true;
+    }
+    return false;
+}
+
+function segmentCrosses(a, b, c, d) {
+    var r0 = b[0] - a[0];
+    var r1 = b[1] - a[1];
+    var s0 = d[0] - c[0];
+    var s1 = d[1] - c[1];
+    var den = r0 * s1 - r1 * s0;
+    var t, u, x, y, dx, dy;
+    if (Math.abs(den) < 1e-8) return false;
+    t = ((c[0] - a[0]) * s1 - (c[1] - a[1]) * s0) / den;
+    u = ((c[0] - a[0]) * r1 - (c[1] - a[1]) * r0) / den;
+    if (t <= 0.04 || t >= 0.98 || u <= 0.02 || u >= 0.98) return false;
+    x = a[0] + r0 * t;
+    y = a[1] + r1 * t;
+    dx = x - a[0];
+    dy = y - a[1];
+    return dx * dx + dy * dy > 2.25;
+}
+
+function fadeGapAt(pts, area, outline, overlapPt, offsetPt, steepPt, splitAt) {
+    var made, i, gap, part;
+    made = buildFadePair(pts, area, outline, overlapPt, offsetPt, steepPt, splitAt);
+    gap = 1e9;
+    for (i = 0; i < made.length; i++) {
+        part = fadeClearance(made[i], outline, 6);
+        if (part < gap) gap = part;
+    }
+    return gap;
+}
+
+function fadeCutsForm(path, outline, clearance, hostReach) {
+    var i, tip, other, c1, c2, samples, s, prev;
+    if (!(clearance > 0)) clearance = 0;
+    if (!(hostReach > 1)) hostReach = 6;
+    for (i = 0; i < path.length; i++) {
+        if (path[i].role !== "fade") continue;
+        tip = path[i];
+        if (i === 0) {
+            other = path[1];
+            c1 = tip.right;
+            c2 = other.left;
+        } else {
+            other = path[i - 1];
+            c1 = other.right;
+            c2 = tip.left;
+        }
+        samples = sampleCubic(i === 0 ? tip.anchor : other.anchor, c1, c2, i === 0 ? other.anchor : tip.anchor);
+        prev = samples[0];
+        for (s = 0; s < samples.length; s++) {
+            if (insideForm(samples[s], outline)) return true;
+            if (s > 1 && crossesOutline(prev, samples[s], outline)) return true;
+            prev = samples[s];
+        }
+    }
+    return clearance > 0 && fadeClearance(path, outline, hostReach) < clearance;
+}
+
+function fadeClearance(path, outline, hostReach) {
+    var i, tip, other, join, attach, samples, s, dx, dy, dist, best, from, to, hit, others;
+    best = 1e9;
+    if (!(hostReach > 1)) hostReach = 8;
+    others = outline && outline.others ? outline.others : null;
+    for (i = 0; i < path.length; i++) {
+        if (path[i].role !== "fade") continue;
+        tip = path[i];
+        if (i === 0) {
+            other = path[1];
+            join = other.anchor;
+            samples = sampleCubic(tip.anchor, tip.right, other.left, other.anchor);
+        } else {
+            other = path[i - 1];
+            join = other.anchor;
+            samples = sampleCubic(other.anchor, other.right, tip.left, tip.anchor);
+        }
+        attach = locateOn(outline, join);
+        from = i === 0 ? 0 : Math.floor(samples.length * 0.55);
+        to = i === 0 ? Math.ceil(samples.length * 0.5) : samples.length;
+        for (s = from; s < to; s++) {
+            dx = samples[s][0] - join[0];
+            dy = samples[s][1] - join[1];
+            if (dx * dx + dy * dy < 2.25) continue;
+            hit = locateOn(outline, samples[s]);
+            if (arcBetween(outline, attach, hit) > hostReach && hit.dist < best) best = hit.dist;
+            if (others) {
+                dist = otherDist(samples[s], others, join);
+                if (dist < best) best = dist;
+            }
+            if (s + 1 < to && crossesFar(samples[s], samples[s + 1], outline, attach, hostReach)) return 0;
+            if (s + 1 < to && others && crossesOthers(samples[s], samples[s + 1], others)) return 0;
+        }
+    }
+    return best;
+}
+
+function locateOn(outline, p) {
+    var n = outline.length;
+    var i, a, b, abx, aby, d, t, px, py, dist, best, seg, at, bx, by;
+    best = 1e9;
+    seg = 0;
+    at = 0;
+    bx = p[0];
+    by = p[1];
+    for (i = 0; i < n; i++) {
+        a = outline[i];
+        b = outline[(i + 1) % n];
+        abx = b[0] - a[0];
+        aby = b[1] - a[1];
+        d = abx * abx + aby * aby;
+        if (d < 1e-6) continue;
+        t = ((p[0] - a[0]) * abx + (p[1] - a[1]) * aby) / d;
+        if (t < 0) t = 0;
+        else if (t > 1) t = 1;
+        px = a[0] + abx * t;
+        py = a[1] + aby * t;
+        dist = (px - p[0]) * (px - p[0]) + (py - p[1]) * (py - p[1]);
+        if (dist < best) {
+            best = dist;
+            seg = i;
+            at = t;
+            bx = px;
+            by = py;
+        }
+    }
+    return { seg: seg, t: at, dist: Math.sqrt(best), point: [bx, by] };
+}
+
+function edgeLenAt(outline, i) {
+    var n = outline.length;
+    var a = outline[i];
+    var b = outline[(i + 1) % n];
+    var dx = b[0] - a[0];
+    var dy = b[1] - a[1];
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+function arcBetween(outline, a, b) {
+    var n = outline.length;
+    var forward, back, guard, i, len;
+    if (!a || !b) return 0;
+    if (a.seg === b.seg) {
+        return Math.abs(a.t - b.t) * edgeLenAt(outline, a.seg);
+    }
+    forward = (1 - a.t) * edgeLenAt(outline, a.seg);
+    i = (a.seg + 1) % n;
+    guard = 0;
+    while (i !== b.seg && guard < n) {
+        forward += edgeLenAt(outline, i);
+        i = (i + 1) % n;
+        guard++;
+    }
+    forward += b.t * edgeLenAt(outline, b.seg);
+    back = a.t * edgeLenAt(outline, a.seg);
+    i = (a.seg - 1 + n) % n;
+    guard = 0;
+    while (i !== b.seg && guard < n) {
+        back += edgeLenAt(outline, i);
+        i = (i - 1 + n) % n;
+        guard++;
+    }
+    len = edgeLenAt(outline, b.seg);
+    back += (1 - b.t) * len;
+    return forward < back ? forward : back;
+}
+
+function otherDist(p, others, join) {
+    var best = 1e9;
+    var k, loc, dx, dy;
+    for (k = 0; k < others.length; k++) {
+        if (!others[k] || others[k].length < 2) continue;
+        loc = locateOn(others[k], p);
+        dx = loc.point[0] - join[0];
+        dy = loc.point[1] - join[1];
+        if (dx * dx + dy * dy < 6.25) continue;
+        if (loc.dist < best) best = loc.dist;
+    }
+    return best;
+}
+
+function crossesFar(a, b, outline, attach, reach) {
+    var n = outline.length;
+    var i, va, vb;
+    for (i = 0; i < n; i++) {
+        if (!segmentCrosses(a, b, outline[i], outline[(i + 1) % n])) continue;
+        va = { seg: i, t: 0 };
+        vb = { seg: i, t: 1 };
+        if (arcBetween(outline, attach, va) <= reach && arcBetween(outline, attach, vb) <= reach) continue;
+        return true;
+    }
+    return false;
+}
+
+function crossesOthers(a, b, others) {
+    var k, o, n, i;
+    for (k = 0; k < others.length; k++) {
+        o = others[k];
+        if (!o) continue;
+        n = o.length;
+        for (i = 0; i < n; i++) {
+            if (segmentCrosses(a, b, o[i], o[(i + 1) % n])) return true;
+        }
+    }
+    return false;
+}
+
+function sampleCubic(p0, p1, p2, p3) {
+    var out = [];
+    var s, t, u;
+    for (s = 0; s <= 8; s++) {
+        t = s / 8;
+        u = 1 - t;
+        out.push([
+            u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0],
+            u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1]
+        ]);
+    }
+    return out;
+}
+
+function fadeTravel(on, atStart, join) {
+    var forward, len, chord, usedHandle;
+    if (atStart) forward = [on.right[0] - on.anchor[0], on.right[1] - on.anchor[1]];
+    else forward = [on.anchor[0] - on.left[0], on.anchor[1] - on.left[1]];
+    len = Math.sqrt(forward[0] * forward[0] + forward[1] * forward[1]);
+    usedHandle = len >= 0.35;
+    if (!usedHandle) {
+        if (atStart) forward = [on.anchor[0] - on.left[0], on.anchor[1] - on.left[1]];
+        else forward = [on.right[0] - on.anchor[0], on.right[1] - on.anchor[1]];
+        len = Math.sqrt(forward[0] * forward[0] + forward[1] * forward[1]);
+        usedHandle = len >= 0.35;
+    }
+    if (usedHandle) {
+        forward = [forward[0] / len, forward[1] / len];
+        if (atStart) return [-forward[0], -forward[1]];
+        return forward;
+    }
+    chord = [on.anchor[0] - join.anchor[0], on.anchor[1] - join.anchor[1]];
+    len = Math.sqrt(chord[0] * chord[0] + chord[1] * chord[1]);
+    if (len < 0.35) return null;
+    return [chord[0] / len, chord[1] / len];
+}
+
+function fadeRunTip(pts, atStart, steep, handle, normal, outline) {
+    var tipIndex, joinIndex, on, join, toward, len, along, side, sideDir, align, tipAt, tip, pathHandle, tipHandle;
+    if (!pts || pts.length < 2 || Math.abs(steep) < 0.01) return;
+    tipIndex = atStart ? 0 : pts.length - 1;
+    joinIndex = atStart ? 1 : pts.length - 2;
+    on = pts[tipIndex];
+    join = pts[joinIndex];
+    toward = fadeTravel(on, atStart, join);
+    if (!toward) return;
+    along = handle < 0.15 ? 0.15 : handle;
+    side = Math.abs(steep);
+    sideDir = [-toward[1], toward[0]];
+    align = sideDir[0] * normal[0] + sideDir[1] * normal[1];
+    if (align < 0.25) sideDir = [normal[0], normal[1]];
+    else if (align < 0) sideDir = [-sideDir[0], -sideDir[1]];
+    if (insideForm([on.anchor[0] + sideDir[0] * 1.5, on.anchor[1] + sideDir[1] * 1.5], outline)) {
+        sideDir = [-sideDir[0], -sideDir[1]];
+    }
+    tipAt = [on.anchor[0] + toward[0] * along + sideDir[0] * side, on.anchor[1] + toward[1] * along + sideDir[1] * side];
+    pathHandle = [toward[0] * along * 0.5522847498, toward[1] * along * 0.5522847498];
+    tipHandle = [-sideDir[0] * side * 0.5522847498, -sideDir[1] * side * 0.5522847498];
+    tip = {
+        anchor: tipAt,
+        left: [tipAt[0], tipAt[1]],
+        right: [tipAt[0], tipAt[1]],
+        corner: false,
+        role: "fade",
+        joint: false
+    };
+    on.corner = false;
+    if (atStart) {
+        tip.right = [tipAt[0] + tipHandle[0], tipAt[1] + tipHandle[1]];
+        on.left = [on.anchor[0] + pathHandle[0], on.anchor[1] + pathHandle[1]];
+        pts.unshift(tip);
+    } else {
+        tip.left = [tipAt[0] + tipHandle[0], tipAt[1] + tipHandle[1]];
+        on.right = [on.anchor[0] + pathHandle[0], on.anchor[1] + pathHandle[1]];
+        pts.push(tip);
+    }
+}
+
 function segmentsCross(p, q, line) {
     var r0 = q[0] - p[0];
     var r1 = q[1] - p[1];

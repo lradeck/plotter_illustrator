@@ -771,13 +771,13 @@ void FadeTip(std::vector<AIPathSegment>& pts, bool atStart, AIReal steep, AIReal
 	}
 }
 
-ASErr Overlap(AIArtHandle path, Segs segs, int index, const AIRealPoint* side)
+ASErr Overlap(AIArtHandle path, Segs segs, int index, const AIRealPoint* side, const AIReal* steepPt, const AIReal* handlePt)
 {
 	if (segs.pts.size() < 2 || index < 0 || index >= (int)segs.pts.size()) return kNoErr;
 	ToolSettings cfg = LoadToolSettings();
 	AIReal dist = (AIReal)(cfg.overlapMm * kPtPerMm);
-	AIReal steep = (AIReal)(cfg.curveSteepnessMm * kPtPerMm);
-	AIReal handle = (AIReal)(cfg.curveOffsetMm * kPtPerMm);
+	AIReal steep = steepPt ? *steepPt : (AIReal)(cfg.curveSteepnessMm * kPtPerMm);
+	AIReal handle = handlePt ? *handlePt : (AIReal)(cfg.curveOffsetMm * kPtPerMm);
 	AIRealPoint outside = side ? *side : OutsideNormal(segs, index);
 	if (side && steep < 0) steep = -steep;
 	bool fade = cfg.fadeIn;
@@ -969,10 +969,12 @@ AIRealPoint SnapCursor(const AIRealPoint& cursor, const AIEvent* event)
 
 struct FadeAim {
 	bool pending;
+	bool dragging;
+	bool applied;
 	AIRealPoint at;
 };
 
-FadeAim gFadeAim = { false, { 0, 0 } };
+FadeAim gFadeAim = { false, false, false, { 0, 0 } };
 
 bool NearPath(const AIRealPoint& at, PathPick& pick)
 {
@@ -995,16 +997,18 @@ AIRealPoint PathPoint(PathPick& pick, const AIRealPoint& at)
 	return at;
 }
 
-ASErr ApplyFadeSide(const AIRealPoint& sideClick)
+ASErr ApplyFadeSide(const AIRealPoint& sideClick, bool finish)
 {
 	PathPick held;
 	if (!NearPath(gFadeAim.at, held)) {
-		gFadeAim.pending = false;
+		if (finish) gFadeAim.pending = false;
 		return kNoErr;
 	}
 	int index = AnchorOrNew(held, gFadeAim.at);
-	gFadeAim.pending = false;
-	if (index < 0 || index >= (int)held.segs.pts.size()) return kNoErr;
+	if (index < 0 || index >= (int)held.segs.pts.size()) {
+		if (finish) gFadeAim.pending = false;
+		return kNoErr;
+	}
 	int n = (int)held.segs.pts.size();
 	int next = index + 1;
 	if (next >= n) next = held.segs.closed ? 0 : index;
@@ -1012,16 +1016,38 @@ ASErr ApplyFadeSide(const AIRealPoint& sideClick)
 	if (prev < 0) prev = held.segs.closed ? n - 1 : 0;
 	AIRealPoint dir = next != index ? Depart(held.segs.pts[index], held.segs.pts[next]) : Arrive(held.segs.pts[prev], held.segs.pts[index]);
 	AIRealPoint unit = UnitPoint(dir);
-	if (LengthPoint(unit) < 0.5) return kNoErr;
+	if (LengthPoint(unit) < 0.5) {
+		if (finish) gFadeAim.pending = false;
+		return kNoErr;
+	}
 	AIRealPoint left;
 	left.h = -unit.v;
 	left.v = unit.h;
-	AIRealPoint delta = SubPoint(sideClick, held.segs.pts[index].p);
-	if (delta.h * left.h + delta.v * left.v < 0) {
+	AIRealPoint from = held.segs.pts[index].p;
+	AIRealPoint delta = SubPoint(sideClick, from);
+	AIReal along = fabs(delta.h * unit.h + delta.v * unit.v);
+	AIReal perp = delta.h * left.h + delta.v * left.v;
+	if (perp < 0) {
 		left.h = -left.h;
 		left.v = -left.v;
+		perp = -perp;
 	}
-	return Overlap(held.path, held.segs, index, &left);
+	AIReal overlap = (AIReal)(LoadToolSettings().overlapMm * kPtPerMm);
+	AIReal handle = along - overlap;
+	if (handle < 0.15f) handle = 0.15f;
+	AIReal steep = perp;
+	if (steep < 0.15f) steep = 0.15f;
+	if (finish) gFadeAim.pending = false;
+	ASErr err = Overlap(held.path, held.segs, index, &left, &steep, &handle);
+	if (finish && err == kNoErr) {
+		ToolSettings cfg = LoadToolSettings();
+		cfg.curveOffsetMm = (double)handle / (double)kPtPerMm;
+		cfg.curveSteepnessMm = (double)steep / (double)kPtPerMm;
+		if (cfg.curveOffsetMm < 0.05) cfg.curveOffsetMm = 0.05;
+		if (cfg.curveSteepnessMm < 0.05) cfg.curveSteepnessMm = 0.05;
+		SaveToolSettings(cfg);
+	}
+	return err;
 }
 
 ASErr OverlapClick(const AIRealPoint& cursor, const AIEvent* event)
@@ -1030,7 +1056,11 @@ ASErr OverlapClick(const AIRealPoint& cursor, const AIEvent* event)
 	PathPick pick;
 	AIRealPoint aim = cursor;
 	bool on = NearPath(cursor, pick);
-	if (cfg.fadeIn && gFadeAim.pending && !on) return ApplyFadeSide(cursor);
+	if (cfg.fadeIn && gFadeAim.pending && !on) {
+		gFadeAim.dragging = true;
+		gFadeAim.applied = false;
+		return kNoErr;
+	}
 	if (!on) {
 		aim = SnapCursor(cursor, event);
 		on = NearPath(aim, pick);
@@ -1038,6 +1068,8 @@ ASErr OverlapClick(const AIRealPoint& cursor, const AIEvent* event)
 	if (!on) return kNoErr;
 	if (cfg.fadeIn) {
 		gFadeAim.pending = true;
+		gFadeAim.dragging = false;
+		gFadeAim.applied = false;
 		gFadeAim.at = PathPoint(pick, aim);
 		SelectArt(pick.path);
 		int existing = NearestAnchor(pick.segs, gFadeAim.at);
@@ -1048,13 +1080,33 @@ ASErr OverlapClick(const AIRealPoint& cursor, const AIEvent* event)
 	int index = AnchorOrNew(pick, cursor);
 	if (index < 0) index = AnchorOrNew(pick, aim);
 	if (index < 0 || index >= (int)pick.segs.pts.size()) return kNoErr;
-	return Overlap(pick.path, pick.segs, index, NULL);
+	return Overlap(pick.path, pick.segs, index, NULL, NULL, NULL);
+}
+
+ASErr DragFadePreview(const AIRealPoint& cursor)
+{
+	if (!gFadeAim.dragging) return kNoErr;
+	if (gFadeAim.applied) sAIUndo->UndoChanges();
+	ASErr err = ApplyFadeSide(cursor, false);
+	gFadeAim.applied = (err == kNoErr);
+	return err;
+}
+
+ASErr FinishFadePreview(const AIRealPoint& cursor)
+{
+	if (!gFadeAim.dragging) return kNoErr;
+	if (gFadeAim.applied) sAIUndo->UndoChanges();
+	gFadeAim.dragging = false;
+	gFadeAim.applied = false;
+	return ApplyFadeSide(cursor, true);
 }
 
 ASErr EditPathAt(PathEditKind kind, const AIRealPoint& cursor, const AIEvent* event)
 {
 	if (kind == kEditOverlap) return OverlapClick(cursor, event);
 	gFadeAim.pending = false;
+	gFadeAim.dragging = false;
+	gFadeAim.applied = false;
 	PathPick pick;
 	AIRealPoint aim = cursor;
 	if (!PickPath(cursor, pick, true)) {

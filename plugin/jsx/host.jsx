@@ -1294,6 +1294,70 @@ function addOverlap(mm) {
     return editOverlap(Number(mm));
 }
 
+function processForm(cutMm, overlapMm, offsetMm, steepMm, clearMm) {
+    return editProcess(Number(cutMm), Number(overlapMm), Number(offsetMm), Number(steepMm), Number(clearMm));
+}
+
+function editProcess(cutMm, overlapMm, offsetMm, steepMm, clearMm) {
+    try {
+        if (!app.documents.length) return "nodoc";
+        loadCorners();
+        if (typeof planProcess !== "function" && typeof $.global.planProcess === "function") planProcess = $.global.planProcess;
+        if (typeof planProcess !== "function") return "ERR pathcorners";
+        var paths = selectedPaths();
+        if (!paths.length) return "nosel";
+        if (!(offsetMm > 0)) offsetMm = 6;
+        if (!(steepMm > 0)) steepMm = 5;
+        if (!(clearMm >= 0)) clearMm = 1;
+        var specs = [];
+        var i;
+        for (i = 0; i < paths.length; i++) {
+            try {
+                if (!paths[i].pathPoints || paths[i].pathPoints.length < 2) {
+                    specs.push({ closed: false, verts: [] });
+                    continue;
+                }
+            } catch (eGone) {
+                specs.push({ closed: false, verts: [] });
+                continue;
+            }
+            specs.push({ closed: paths[i].closed === true, verts: readVerts(paths[i]) });
+        }
+        var plan = planProcess(
+            specs,
+            cutMm > 0 ? cutMm * MM : 0,
+            overlapMm > 0 ? overlapMm * MM : 0,
+            offsetMm * MM,
+            steepMm * MM,
+            clearMm * MM
+        );
+        var made = 0;
+        var created = [];
+        var s, src, neu;
+        for (s = 0; s < plan.strokes.length; s++) {
+            src = paths[plan.strokes[s].source];
+            neu = src.layer.pathItems.add();
+            neu.closed = false;
+            writeCurve(neu, plan.strokes[s].verts);
+            copyAppearance(src, neu);
+            created.push(neu);
+            made++;
+        }
+        for (s = 0; s < plan.remove.length; s++) {
+            try { paths[plan.remove[s]].remove(); } catch (eRem) {}
+        }
+        if (created.length) {
+            try { app.activeDocument.selection = created; } catch (eSel) {}
+        }
+        logLine("process cut " + cutMm + " overlap " + overlapMm + " offset " + offsetMm + " steep " + steepMm + " clear " + clearMm + " made " + made);
+        app.redraw();
+        return made ? "ok " + made : "none";
+    } catch (eEdit) {
+        logLine("process ERR " + clean(eEdit.message));
+        return "ERR " + clean(eEdit.message);
+    }
+}
+
 function loadCorners() {
     if (typeof planCut === "function") return;
     var candidates = [];
@@ -1311,6 +1375,7 @@ function loadCorners() {
         if (typeof planCut === "function") {
             $.global.planCut = planCut;
             if (typeof planOverlap === "function") $.global.planOverlap = planOverlap;
+            if (typeof planProcess === "function") $.global.planProcess = planProcess;
             return;
         }
     }
@@ -1521,9 +1586,9 @@ function writeCurve(path, pts) {
             p.rightDirection = vert.anchor;
             p.pointType = PointType.CORNER;
         } else {
+            p.pointType = PointType.CORNER;
             p.leftDirection = vert.left;
             p.rightDirection = vert.right;
-            p.pointType = vert.corner ? PointType.CORNER : PointType.SMOOTH;
         }
     }
 }

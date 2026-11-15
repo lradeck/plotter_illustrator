@@ -393,4 +393,141 @@ function minLoopGap(verts) {
 assert.ok(crossed.strokes.length === 1, "crowded form still joins");
 assert.ok(minLoopGap(cleared.strokes[0].verts) + 0.05 >= 4, "loops stay 4 units off the form, gap " + minLoopGap(cleared.strokes[0].verts));
 
+var mm = 72 / 25.4;
+var squareProcess = ctx.planProcess([ring([[0, 0], [200, 0], [200, 200], [0, 200]])], 6 * mm, 4 * mm, 6 * mm, 5 * mm);
+assert.strictEqual(squareProcess.strokes.length, 4, "square process is four sides");
+squareProcess.strokes.forEach(function (stroke) {
+    stroke.verts.forEach(function (vert) {
+        if (vert.role !== "ext") return;
+        var dx = Math.min(Math.abs(vert.anchor[0]), Math.abs(vert.anchor[0] - 200));
+        var dy = Math.min(Math.abs(vert.anchor[1]), Math.abs(vert.anchor[1] - 200));
+        var reach = dx < 1 ? dy : dx;
+        assert.ok(Math.abs(reach - 6 * mm) < 0.2, "clear overcut stays at 6mm, got " + reach);
+    });
+});
+
+var pocketVerts = [[0, 0], [80, 0], [80, 70], [55, 70], [55, 25], [25, 25], [25, 70], [0, 70]];
+var pocket = ctx.planProcess([ring(pocketVerts)], 6 * mm, 4 * mm, 6 * mm, 5 * mm);
+var pocketOutline = ctx.formOutline(ring(pocketVerts).verts);
+var fades = [];
+pocket.strokes.forEach(function (stroke) {
+    stroke.verts.forEach(function (vert) {
+        if (vert.role === "fade") fades.push(vert.anchor);
+    });
+});
+assert.strictEqual(fades.length, 2, "both inward ends fade");
+fades.forEach(function (tip) {
+    assert.ok(tip[1] > 26, "fade comes from outside, y " + tip[1]);
+    assert.ok(!ctx.insideForm(tip, pocketOutline), "fade stays out of the form at " + tip[0].toFixed(2) + "," + tip[1].toFixed(2));
+});
+
+var channel = ctx.planProcess([ring([[0, 0], [40, 0], [40, 15], [15, 15], [15, 45], [40, 45], [40, 60], [0, 60]])], 50, 2, 4, 3);
+var shortened = null;
+channel.strokes.forEach(function (stroke) {
+    stroke.verts.forEach(function (vert) {
+        if (vert.role !== "ext") return;
+        if (Math.abs(vert.anchor[0] - 40) > 1) return;
+        if (vert.anchor[1] <= 16 || vert.anchor[1] >= 45) return;
+        shortened = vert.anchor[1] - 15;
+    });
+});
+assert.ok(shortened !== null && shortened < 30 && shortened > 20, "overcut stops before the form, reach " + shortened);
+
+function Vh(x, y, left, right) {
+    return { anchor: [x, y], left: left || [x, y], right: right || [x, y], corner: true, role: "flat" };
+}
+var straightBay = ctx.planProcess([{
+    closed: true,
+    verts: [
+        Vh(0, 0), Vh(160, 0), Vh(160, 80), Vh(120, 80), Vh(120, 20),
+        Vh(50, 20, [50, 20], [45, 24]),
+        Vh(20, 20, [28, 20], [20, 20]),
+        Vh(20, 80), Vh(0, 80)
+    ]
+}], 6 * mm, 4 * mm, 6 * mm, 5 * mm);
+var joins = [];
+straightBay.strokes.forEach(function (stroke) {
+    var i;
+    for (i = 0; i < stroke.verts.length; i++) {
+        if (stroke.verts[i].role !== "fade") continue;
+        joins.push(i === 0 ? stroke.verts[1].anchor : stroke.verts[i - 1].anchor);
+    }
+});
+assert.strictEqual(joins.length, 2, "curve-and-straight bay fades both ends");
+joins.forEach(function (join) {
+    assert.ok(Math.abs(join[1] - 20) < 0.8 && join[0] > 50 && join[0] < 120, "overlap lies on the straight span at " + join[0].toFixed(1) + "," + join[1].toFixed(1));
+});
+assert.ok(Math.abs(Math.abs(joins[0][0] - joins[1][0]) - 8 * mm) < 1.5, "the two paths share the straight line for 2x overlap, gap " + Math.abs(joins[0][0] - joins[1][0]).toFixed(2));
+
+var slot = ctx.planProcess([{
+    closed: true,
+    verts: [[0, 0], [80, 0], [80, 40], [60, 40], [60, 18], [15, 18], [15, 28], [50, 28], [50, 40], [0, 40]].map(function (p) { return V(p[0], p[1]); })
+}], 6 * mm, 4 * mm, 6 * mm, 5 * mm, mm);
+var slotJoins = [];
+var slotTips = [];
+slot.strokes.forEach(function (stroke) {
+    var i, join;
+    for (i = 0; i < stroke.verts.length; i++) {
+        if (stroke.verts[i].role !== "fade") continue;
+        join = i === 0 ? stroke.verts[1].anchor : stroke.verts[i - 1].anchor;
+        if (Math.abs(join[1] - 18) < 0.8 && join[0] > 20) {
+            slotJoins.push(join);
+            slotTips.push(stroke.verts[i].anchor);
+        }
+    }
+});
+assert.strictEqual(slotJoins.length, 2, "clearance keeps both floor fades");
+assert.ok(Math.abs(Math.abs(slotJoins[0][0] - slotJoins[1][0]) - 8 * mm) < 1.5, "overlap stays 4mm under the ceiling, gap " + Math.abs(slotJoins[0][0] - slotJoins[1][0]).toFixed(2));
+slotTips.forEach(function (tip) {
+    assert.ok(tip[1] < 28 - mm + 0.6, "fade keeps clearance under the ceiling, y " + tip[1].toFixed(2));
+    assert.ok(tip[1] > 18 + 4, "fade stays a real curve, y " + tip[1].toFixed(2));
+});
+
+var beside = ctx.planProcess([
+    {
+        closed: true,
+        verts: [[0, 0], [80, 0], [80, 40], [60, 40], [60, 18], [15, 18], [15, 28], [50, 28], [50, 40], [0, 40]].map(function (p) { return V(p[0], p[1]); })
+    },
+    ring([[18, 24], [48, 24], [48, 34], [18, 34]])
+], 6 * mm, 4 * mm, 6 * mm, 5 * mm, mm);
+beside.strokes.forEach(function (stroke) {
+    var i, join, tip;
+    if (stroke.source !== 0) return;
+    for (i = 0; i < stroke.verts.length; i++) {
+        if (stroke.verts[i].role !== "fade") continue;
+        join = i === 0 ? stroke.verts[1].anchor : stroke.verts[i - 1].anchor;
+        if (Math.abs(join[1] - 18) > 0.8 || join[0] < 20) continue;
+        tip = stroke.verts[i].anchor;
+        assert.ok(tip[1] < 24 - mm + 0.5, "fade keeps clearance from the neighboring path, y " + tip[1].toFixed(2));
+        assert.ok(tip[1] > 18, "fade stays outside the floor, y " + tip[1].toFixed(2));
+    }
+});
+
+var curvedJoin = [
+    Vh(-20, 8, [-20, 8], [-16, 6]),
+    Vh(0, 0, [-8, 2], [0, 0])
+];
+ctx.fadeRunTip(curvedJoin, false, 12, 14, [0, 1], []);
+var joined = curvedJoin[curvedJoin.length - 2];
+var into = [joined.anchor[0] - joined.left[0], joined.anchor[1] - joined.left[1]];
+var outOf = [joined.right[0] - joined.anchor[0], joined.right[1] - joined.anchor[1]];
+var intoLen = Math.sqrt(into[0] * into[0] + into[1] * into[1]);
+var outLen = Math.sqrt(outOf[0] * outOf[0] + outOf[1] * outOf[1]);
+var align = (into[0] * outOf[0] + into[1] * outOf[1]) / (intoLen * outLen);
+assert.ok(align > 0.98, "fade continues the path tangent, align " + align.toFixed(3));
+
+var chordJoin = [
+    Vh(0, 0, [0, 0], [8, -1.7]),
+    Vh(9.5, 12, [14, -1], [9.5, 12])
+];
+ctx.fadeRunTip(chordJoin, true, 8, 10, [0, 1], []);
+joined = chordJoin[1];
+into = [joined.anchor[0] - joined.left[0], joined.anchor[1] - joined.left[1]];
+outOf = [joined.right[0] - joined.anchor[0], joined.right[1] - joined.anchor[1]];
+intoLen = Math.sqrt(into[0] * into[0] + into[1] * into[1]);
+outLen = Math.sqrt(outOf[0] * outOf[0] + outOf[1] * outOf[1]);
+align = (into[0] * outOf[0] + into[1] * outOf[1]) / (intoLen * outLen);
+assert.ok(align > 0.98, "fade follows the handle, not the chord, align " + align.toFixed(3));
+assert.ok(Math.sqrt(Math.pow(chordJoin[0].anchor[0] - joined.anchor[0], 2) + Math.pow(chordJoin[0].anchor[1] - joined.anchor[1], 2)) > 6, "fade end stays large");
+
 console.log("pathcorners ok");

@@ -24,6 +24,8 @@ protected:
 	virtual ASErr EditTool(AIToolMessage* message);
 	virtual ASErr TrackToolCursor(AIToolMessage* message);
 	virtual ASErr ToolMouseDown(AIToolMessage* message);
+	virtual ASErr ToolMouseDrag(AIToolMessage* message);
+	virtual ASErr ToolMouseUp(AIToolMessage* message);
 
 private:
 	AIToolHandle fTool[4];
