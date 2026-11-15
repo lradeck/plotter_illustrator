@@ -682,19 +682,31 @@ bool ExtendOpenEnd(std::vector<AIPathSegment>& pts, bool atStart, AIReal dist, A
 	return true;
 }
 
-AIRealPoint PathCentroid(const std::vector<AIPathSegment>& pts)
+bool InsideShape(const Segs& segs, const AIRealPoint& p)
 {
-	AIRealPoint center;
-	center.h = 0;
-	center.v = 0;
-	if (pts.empty()) return center;
-	for (size_t i = 0; i < pts.size(); ++i) {
-		center.h += pts[i].p.h;
-		center.v += pts[i].p.v;
+	if (!segs.closed || segs.pts.size() < 3) return false;
+	std::vector<AIRealPoint> poly;
+	int n = (int)segs.pts.size();
+	for (int i = 0; i < n; ++i) {
+		AIRealBezier bez = BezierOf(segs.pts[i], segs.pts[(i + 1) % n]);
+		for (int step = 0; step < 8; ++step) {
+			AIRealPoint at;
+			sAIRealBezier->Evaluate(&bez, (AIReal)step / 8.0f, &at);
+			poly.push_back(at);
+		}
 	}
-	center.h /= (AIReal)pts.size();
-	center.v /= (AIReal)pts.size();
-	return center;
+	int wind = 0;
+	int m = (int)poly.size();
+	for (int i = 0; i < m; ++i) {
+		AIRealPoint a = poly[i];
+		AIRealPoint b = poly[(i + 1) % m];
+		AIReal side = (b.h - a.h) * (p.v - a.v) - (b.v - a.v) * (p.h - a.h);
+		if (a.v <= p.v) {
+			if (b.v > p.v && side > 0) wind++;
+		}
+		else if (b.v <= p.v && side < 0) wind--;
+	}
+	return wind != 0;
 }
 
 AIRealPoint OutsideNormal(const Segs& segs, int index)
@@ -710,9 +722,8 @@ AIRealPoint OutsideNormal(const Segs& segs, int index)
 	left.h = -unit.v;
 	left.v = unit.h;
 	if (!segs.closed || LengthPoint(unit) < 0.5) return left;
-	AIRealPoint center = PathCentroid(segs.pts);
-	AIRealPoint outward = SubPoint(segs.pts[index].p, center);
-	if (left.h * outward.h + left.v * outward.v < 0) {
+	AIRealPoint probe = AddPoint(segs.pts[index].p, ScalePoint(left, 1.0f));
+	if (InsideShape(segs, probe)) {
 		left.h = -left.h;
 		left.v = -left.v;
 	}
@@ -732,8 +743,13 @@ void FadeTip(std::vector<AIPathSegment>& pts, bool atStart, AIReal steep, AIReal
 	AIReal along = handle;
 	if (along < 0.15) along = 0.15;
 	AIReal side = fabs(steep);
-	AIRealPoint sideDir = UnitPoint(ScalePoint(normal, steep));
-	if (LengthPoint(sideDir) < 0.5) sideDir = normal;
+	AIRealPoint sideDir;
+	sideDir.h = -towardTip.v;
+	sideDir.v = towardTip.h;
+	AIReal align = sideDir.h * normal.h + sideDir.v * normal.v;
+	if (fabs(align) < 0.25) sideDir = UnitPoint(normal);
+	else if (align < 0) sideDir = ScalePoint(sideDir, -1.0f);
+	if (steep < 0) sideDir = ScalePoint(sideDir, -1.0f);
 	AIPathSegment tip = Straight(AddPoint(AddPoint(on.p, ScalePoint(towardTip, along)), ScalePoint(sideDir, side)));
 	AIRealPoint tipHandle = ScalePoint(sideDir, -(side * arc));
 	AIRealPoint pathHandle = ScalePoint(towardTip, along * arc);
